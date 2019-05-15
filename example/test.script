@@ -1,0 +1,14 @@
+../bin/gramsci -gal test.gal -ran test.ran -rmin 1.0 -rmax 20. -nbins 10 -wgt .false. -out test
+
+#../bin/domain_decomposition.sh test.gal test.ran2 2 20.0
+
+#COUNTER=1
+#while [  $COUNTER -le 8 ]; do
+#    echo The counter is $COUNTER
+#    ../bin/graph -cut $COUNTER.loadnodes -rmin 0.0 -rmax 20.0 -nbins 5 -wgt .true. -out test.$COUNTER
+#    let COUNTER=COUNTER+1 
+#done
+
+#python resum.py test. 8 test.gal test.ran
+
+

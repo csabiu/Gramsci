@@ -1,0 +1,14 @@
+This is a stand-alone package. 
+
+from the command line type:
+-----------
+cd src
+make all
+-----------
+
+The executable are stored in the folder called bin.
+
+ISSUES:
+
+
+
