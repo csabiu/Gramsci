@@ -22,8 +22,8 @@ CALLING SEQUENCE:
               [-rmin Rmin] [-rmax Rmax] [-nbins Nbins] 
               [-RSD] [-nmu Nmu] [-mpi]
  
-      eg: graph -cut 1.loadnodes -rmin 4.0 -rmax 12.0 -nbins 6 -nmu 4 -wgt .true. -RSD .true. 
-          graph -gal test.gal -ran test.ran -rmax 20.0 -nbins 10 -wgt .true. 
+      eg: gramsci -cut 1.loadnodes -rmin 4.0 -rmax 12.0 -nbins 6 -nmu 4 -wgt -RSD  
+          gramsci -gal test.gal -ran test.ran -rmax 20.0 -nbins 10 -wgt 
 
 INPUTS:
        data_file = input catalogue 3-4 columns [x y z (weight)]
