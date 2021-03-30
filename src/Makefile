@@ -8,8 +8,8 @@ FLAGSOPT=
 #-O3 -ffast-math 
 FLAGSDEBUG= -g -fbounds-check -O0
 
-F90=/usr/local/bin/mpif90 -DMPI -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -mtune=intel -faggressive-loop-optimizations -ftree-loop-if-convert 
-#F90=gfortran-8 -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -mtune=intel -faggressive-loop-optimizations -ftree-loop-if-convert 
+#F90=/usr/local/bin/mpif90 -DMPI -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -mtune=intel -faggressive-loop-optimizations -ftree-loop-if-convert 
+F90=gfortran -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -faggressive-loop-optimizations -ftree-loop-if-convert 
 #F90=ifort -O3 -fopenmp -132 -parallel -xSSE4.2 -m64 -fast
 #F90=ifort -O0 -g -traceback -debug all -gen-interfaces -warn interfaces -fopenmp -132 
 #-O3 -fopenmp -132 -xSSE4.2 -m64 -fast
