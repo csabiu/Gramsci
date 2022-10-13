@@ -11,51 +11,31 @@
  **   gramsci   **
  -----------------
 
-PURPOSE: 
-
-      Code for calculating the 3PCF of a 3D point set.
-
-CALLING SEQUENCE:
-
-      gramsci [-gal data_file] [-ran random_file] [-out out_file] 
-              [-cut xxx.loadnodes][-wgt]
-              [-rmin Rmin] [-rmax Rmax] [-nbins Nbins] 
-              [-RSD] [-nmu Nmu] [-mpi]
- 
-      eg: gramsci -cut 1.loadnodes -rmin 4.0 -rmax 12.0 -nbins 6 -nmu 4 -wgt -RSD  
-          gramsci -gal test.gal -ran test.ran -rmax 20.0 -nbins 10 -wgt 
-
-INPUTS:
-       data_file = input catalogue 3-4 columns [x y z (weight)]
-
-       random_file = input random catalogue 3-4 columns [x y z (weight)] - matching above file
-
-       out_file = filename for output correlation func. 
-                  files created out_file.2pcf and outfile.3pcf 
-   
-       Rmin = Min. radial seperation
-   
-       Rmax = Max. radial seperation
- 
-OPTIONAL:
-
-       Nbins = Number of radial bins to calculate (default=1)
- 
-       WGT = logical value to define if weights are to be included (default=FALSE)
-              In this case, the input gal/ran files should be 4 columns 
- 
-       RSD = logical value to request anisotropic analysis (default=FALSE)
-              In this case the number of angular bins Nmu should be set
-
-       Nmu = Number of angular bins (default=1)
-
-       xxx.loadnodes = If "-cut" it will load a domain decomposed file created by running 
-                       bin/domain_decompose.sh data_file random_file N Rmax
-                       where N controls the number of domain decomposed
-                       regions N^3. Ie N=3 -> 27 regions. 
-
-                       If also "-mpi" is used, each MPI thread will attemp to open a loadnodes file
-		       Ie thread 1 will open 1.loadnodes, thread 2 will open 2.loadnodes, etc
+PURPOSE: Code for calculating the N-PCFs of a 3D point set. 
+      
+      
+ CALLING SEQUENCE:
+       gramsci [-gal galaxy file][-ran ranfile (optional)]
+               [-rmin Rmin] [-rmax Rmax] [-nbins Nbins] 
+               [-RSD RSD] [-nmu Nmu] [-out out_file] 
+  
+       eg: ./gramsci -rmin 10.0 -rmax 12.0 -nbins 10 [choose one: -2pcf -3pcf -4pcf]
+  
+ INPUTS:
+    
+        out_file = filename for output correlation func. 
+    
+        Rmin = Min. radial seperation
+    
+        Rmax = Max. radial seperation
+  
+ OPTIONAL:
+        Nbins = Number of radial bins to calculate
+  
+        Nmu = Number of angular (mu) bins - linear in range -1<mu<+1
+  
+        RSD = logical value to request anisotropic analysis.
+               In this case the number of angular bins Nmu should be set
 
 
  --------------------------------
