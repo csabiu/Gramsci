@@ -1,4 +1,4 @@
-program ThreePCF
+program Ngramsci
   use kdtree2_module
   use kdtree2_precision_module
   implicit none
@@ -16,22 +16,23 @@ program ThreePCF
   type(node), dimension(:), allocatable :: output
   
   real(kdkind), dimension(:,:), allocatable :: my_array
-  real(kdkind), allocatable ::  v1(:),v2(:),v3(:),v4(:)
+  real(kdkind), allocatable ::  v1(:),v2(:),v3(:),v4(:),rbin(:)
 
   type(kdtree2), pointer :: tree
-  real(kdkind), allocatable :: Zddd(:,:,:,:,:),Zddr(:,:,:,:,:),Zdrr(:,:,:,:,:),Zrrr(:,:,:,:,:),crap(:,:,:,:,:)
-  real(kdkind), allocatable :: Zdd(:,:),Zdr(:,:),Zrr(:,:),crap2(:,:), wgt1(:)
-  integer, allocatable :: gal(:), buffer(:)
+  real(kdkind), allocatable :: N3(:,:,:)
+  real(kdkind), allocatable :: N2(:,:,:),wgt1(:),disc(:,:),discN(:,:,:,:),discR(:,:,:,:)
+  integer, allocatable ::  buffer(:), bintable(:,:,:,:)
   real :: avgal,avran
   real(kdkind) :: ndd,nrr
-  integer :: k, i, j, l,m,n,d,chunk,nmu,nbins,iloop
-  integer*1 :: mu1,mu2,ind1,ind2,ind3,ind4
+  integer :: k, i, j, l,m,n,d,chunk,nmu,nbins,iloop,nrel,cbins
+  integer*1 :: mu1,mu2,mu3,ind1,ind2,ind3,ind4
   character :: file1*2000,file2*2000, ranfile*2000, outfile*2000
   type(kdtree2_result),allocatable :: resultsb(:)
   integer   ::  Ndata,Nrand,nn1,nn2,nnode,nodeid, thread, threads
   real(kdkind)  :: aux,odr,odtheta,theta,start,finish
   real(kdkind) :: rmin, rmax, dr, vec_dist,lrmin
-  logical :: wgt, logbins, RSD, loadran,saveran,cut,DOMPI
+  logical :: wgt, logbins, RSD, loadran,saveran,cut,DOMPI,four_pcf_tetra,four_pcf,three_pcf
+  logical :: rancat,four_pcf_box, three_pcf_eq, two_pcf
   integer :: myid , ntasks , ierr
   real(kdkind), parameter :: pival=3.14159265358979323846d0
 #ifdef MPI 
@@ -52,13 +53,18 @@ threads=1
  call MPI_COMM_SIZE( MPI_COMM_WORLD , ntasks , ierr )
 #endif
 
- !print*, 'node ',myid, 'of ',ntasks,' checking in...'
+ print*, 'node ',myid, 'of ',ntasks,' checking in...'
 
 !--- set some default parameters ---
   call default_params()
 
   if(myid==master) print*,'reading options'
   call parseOptions()
+
+  cbins=nbins
+  call create_binlookup()
+  print*,'Number of binned configurations:',cbins
+print*,'number of mu bins:',nmu 
 
    if(myid==master)  print*,'allocated bins'
 
@@ -68,14 +74,31 @@ threads=1
     call count_files_2()
     endif
 
-  Allocate(my_array(d,Ndata))
-  Allocate(wgt1(Ndata))
-  allocate(gal(Ndata))
-  allocate(buffer(Ndata))
+
+  Allocate(my_array(d,Ndata+Nrand))
+  Allocate(wgt1(Ndata+Nrand))
+  !allocate(gal(Ndata+Nrand))
+  allocate(buffer(Ndata+Nrand))
   allocate(v1(d))
   allocate(v2(d))
   allocate(v3(d))
+  allocate(rbin(nbins+1))
   
+
+print*, "================="
+print*, "= defining bins ="
+print*, "================="
+print*,rmin
+  do i=1,nbins+1
+    j=i-1
+    if(logbins) then
+      rbin(i)=10**(log10(rmin)+j*(log10(rmax)-log10(rmin))/float(nbins))
+    else
+      rbin(i)=rmin+j*(rmax-rmin)/float(nbins)
+    endif
+    print*, rbin(i)
+  enddo 
+
   if(cut) then
     call read_files()
   else
@@ -97,18 +120,15 @@ allocate(v4(100))
 do i=1,100
   call random_number(dr)
   j = floor( dr*Ndata )+1
-  !print*,dr,j
   nn2=kdtree2_r_count_around_point(tp=tree,idxin=j,correltime=-1,r2=rmax*rmax)
   v4(i)=nn2*1.d0
-  !print*,j,nn2
   dr = SUM(v4)/SIZE(v4)
 enddo
 !print*,maxval(v4),dr,sqrt(SUM((v4-dr)**2)/SIZE(v4))
 !dr=dr+2*sqrt(SUM((v4-dr)**2)/SIZE(v4))
 !nn2=floor(dr)+1
 
-!print*, 'size of results:', nn2
-print*, 'est. memory usage (Gb): ', Ndata*0.004d0*SUM(v4)/(SIZE(v4)*468911.d0)
+print*, 'est. memory usage (Gb): ', (Ndata+Nrand)*0.004d0*SUM(v4)/(SIZE(v4)*468911.d0)
 print*, 'if this is larger than the RAM in your computer, you should probably kill me'
 
 !!!!!!!!!!!! sampling data !!!!!!!!!!!!!!!
@@ -129,7 +149,7 @@ endif
 odtheta=(0.5*nmu)
 
 
-allocate(output(Ndata))
+allocate(output(Ndata+Nrand))
 
 !$OMP PARALLEL
 !$ threads=OMP_GET_NUM_THREADS()
@@ -141,10 +161,10 @@ if(myid==master) print*,'Code running with ',ntasks,' MPI processes each with ',
 call cpu_time(start)
 call create_graph(1,999)
 call cpu_time(finish)
-print '("Creating graph will take ~ ",f10.3," minutes.")',(finish-start)*Ndata/(60.*1000.*threads)
+print '("Creating graph will take ~ ",f10.3," minutes.")',(finish-start)*(Ndata+Nrand)/(60.*1000.*threads)
 print*, 'If this takes longer than time to drink a coffee, maybe you should give me more CPUs'
 print*, 'Or consider decomposing the domain decomposition option with larger N.'
-call create_graph(1000,Ndata)
+call create_graph(1000,(Ndata+Nrand))
 call cpu_time(finish)
 print '("Creating the graph took ",f12.3," seconds.")',(finish-start)/threads
 
@@ -160,40 +180,45 @@ call MPI_Barrier(MPI_COMM_WORLD,ierr)
 
 if(myid==0) print*,'finished building node relationships '
 
-call normalise_counts()
+
+!!!! Timing test !!!!!!
 call cpu_time(start)
-!call query_graph_sorted()
-ranfile=trim(outfile)//".4pcf"
-open(11,file=ranfile,status='unknown')
-do iloop=1,nbins
-  ind1=iloop
-  ind2=iloop
-  ind3=iloop
-  ind4=iloop
-  call query_graph_single4(ind1,ind2,ind3,ind4)
-  Zddd=Zddd/(ndd*(ndd-avgal)*(ndd-2*avgal)*(ndd-3*avgal))
-  Zrrr=Zrrr/(nrr*(nrr-avran)*(nrr-2*avran)*(nrr-3*avran))
-  write(11,'(2(e14.7,1x))') (iloop-1)*dr + 0.5*dr,(Zddd(iloop,iloop,iloop,1,1)-Zrrr(iloop,iloop,iloop,1,1))/Zrrr(iloop,iloop,iloop,1,1)
-enddo
+!if(two_pcf) call query_graph_2pcf(1,3*threads)
+!if(three_pcf_eq) call query_graph_equilateral_triangle(1,3*threads)
+!!if(four_pcf) call query_4pcf_all(1,3*threads)
+!if(four_pcf_tetra) call query_graph_tetrahedron(1,3*threads)
 call cpu_time(finish)
-close(11)
-print '("Querying graph took ",f12.3," seconds.")',(finish-start)/threads
+print '("Calling graph will take ~ ",f10.3," minutes.")',(finish-start)*(Ndata+Nrand)/(60.*3.*threads*threads)
 
-Zddd=0.0
-Zrrr=0.0
-
+!!!! Run the desired analysis !!!!!!
 call cpu_time(start)
-ranfile=trim(outfile)//".3pcf"
-open(11,file=ranfile,status='unknown')
-do iloop=1,10
-  ind1=iloop
-  ind2=iloop
-  ind3=iloop
-  call query_graph_single3(ind1,ind2,ind3)
-  Zddd=Zddd/(ndd*(ndd-avgal)*(ndd-2*avgal))
-  Zrrr=Zrrr/(nrr*(nrr-avran)*(nrr-2*avran))
-  write(11,'(2(e14.7,1x))') (iloop-1)*dr + 0.5*dr, (Zddd(iloop,iloop,iloop,1,1)-Zrrr(iloop,iloop,iloop,1,1))/Zrrr(iloop,iloop,iloop,1,1)
-enddo
+N2=0d0
+N3=0d0
+if(two_pcf) call query_graph_2pcf(1,Ndata+Nrand)
+if(three_pcf) call query_graph_3pcf_all(1,Ndata+Nrand)
+if(three_pcf_eq) call query_graph_equilateral_triangle(1,Ndata+Nrand)
+if(four_pcf) then
+  allocate(discN(cbins,cbins,nbins,6))
+  allocate(discR(cbins,cbins,nbins,6))
+  discN=0d0
+  discR=0d0
+  !call query_graph_disc(1,Ndata+Nrand)
+  call query_4pcf_all2(1,Ndata+Nrand)
+  deallocate(discN)
+  deallocate(discR)
+endif
+if(four_pcf_tetra) then
+  allocate(discN(cbins,1,1,6))
+  allocate(discR(cbins,1,1,6))
+  discN=0d0
+  discR=0d0
+  call query_graph_tetrahedron(1,Ndata+Nrand)
+  deallocate(discN)
+  deallocate(discR)
+endif
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+deallocate(output)
 
 call cpu_time(finish)
 close(11)
@@ -218,68 +243,23 @@ if(myid==0) print*,'results collected'
 call MPI_Barrier(MPI_COMM_WORLD,ierr)
 #endif
 
-if(myid==master) then
-
-if(myid==0) print*,'normalising counts' 
-
-if(cut) then
-  continue
-else
-  call normalise_counts()
-endif
-
-if(myid==0) print*,'counts normalised' 
-
-ranfile=trim(outfile)//".3pcf"
-open(11,file=ranfile,status='unknown')
-do l=1,nbins
-    do m=1,nbins
-        do n=1,nbins
-           do j=1,nmu
-             do k=1,nmu
-
-            if(logbins) then
-             write(11,'(15(e14.7,1x))')10**((l-1)*dr+lrmin),10**(l*dr+lrmin),&
-                                       10**((m-1)*dr+lrmin),10**(m*dr+lrmin),&
-                                       10**((n-1)*dr+lrmin),10**(n*dr+lrmin),&
-                                       ((float(j)-1.)/odtheta)-1.,(float(j)/odtheta)-1.,&
-                                       ((float(k)-1.)/odtheta)-1.,(float(k)/odtheta)-1.,&
-                                       Zddd(l,m,n,j,k),Zddr(l,m,n,j,k),Zdrr(l,m,n,j,k),Zrrr(l,m,n,j,k),&
-             (Zddd(l,m,n,j,k)-3*Zddr(l,m,n,j,k)+3*Zdrr(l,m,n,j,k)-Zrrr(l,m,n,j,k))/Zrrr(l,m,n,j,k)
-            else
-             write(11,'(15(e14.7,1x))')(l-1)*dr+rmin,l*dr+rmin,(m-1)*dr+rmin,m*dr+rmin,(n-1)*dr+rmin,n*dr+rmin,&
-             ((float(j)-1.)/odtheta)-1.,(float(j)/odtheta)-1.,((float(k)-1.)/odtheta)-1.,(float(k)/odtheta)-1.,&
-             Zddd(l,m,n,j,k),Zddr(l,m,n,j,k),Zdrr(l,m,n,j,k),Zrrr(l,m,n,j,k),&
-             (Zddd(l,m,n,j,k)-3*Zddr(l,m,n,j,k)+3*Zdrr(l,m,n,j,k)-Zrrr(l,m,n,j,k))/Zrrr(l,m,n,j,k)
-           endif
-
-            enddo
-           enddo
-        enddo
-    enddo
-enddo
-close(11)
-
-
-ranfile=trim(outfile)//".2pcf"
-open(11,file=ranfile,status='unknown')
-do l=1,nbins
-    do k=1,nmu   
-             
-
-        if(logbins) then
-        write(11,'(8(e14.7,1x))')10**((l-1)*dr+lrmin),10**(l*dr+lrmin),&
-                                 ((float(k)-1.)/odtheta)-1.,(float(k)/odtheta)-1.,&
-             Zdd(l,k),Zdr(l,k),Zrr(l,k), (Zdd(l,k)-2*Zdr(l,k)+Zrr(l,k))/Zrr(l,k)
-        else
-        write(11,'(8(e14.7,1x))')(l-1)*dr+rmin,l*dr+rmin,((float(k)-1.)/odtheta)-1.,(float(k)/odtheta)-1.,&
-             Zdd(l,k),Zdr(l,k),Zrr(l,k), (Zdd(l,k)-2*Zdr(l,k)+Zrr(l,k))/Zrr(l,k)
-        endif
-    enddo
-enddo
-close(11)
-
-endif
+!if(myid==master) then
+!outfile=trim(outfile)
+!open(11,file=outfile,status='unknown')
+!do l=1,nbins
+!    do k=1,nmu   
+!        if(logbins) then
+!        write(11,'(8(e14.7,1x))')10**((l-1)*dr+lrmin),10**(l*dr+lrmin),&
+!                                 ((float(k)-1.)/odtheta)-1.,(float(k)/odtheta)-1.,&
+!             N2(l,k,3),N3(l,k,3),N2(l,k,3)/N3(l,k,3)
+!        else
+!        write(11,'(8(e14.7,1x))')(l-1)*dr+rmin,l*dr+rmin,((float(k)-1.)/odtheta/2.),(float(k)/odtheta/2.),&
+!             N2(l,k,3),N3(l,k,3),N2(l,k,3)/N3(l,k,3)
+!        endif
+!    enddo
+!enddo
+!close(11)
+!endif
 
 ! deallocate the memory for the data.
 
@@ -295,7 +275,7 @@ call MPI_Barrier(MPI_COMM_WORLD,ierr)
 call MPI_FINALIZE( ierr )
 #endif
 
-deallocate(gal)
+!deallocate(gal)
 deallocate(buffer)
 
 if(myid==master) then
@@ -312,36 +292,30 @@ integer :: istart,iend
 real :: start, finish
 
 !$OMP PARALLEL DO schedule(dynamic)  private(i,j,k,vec_dist,v1,v2,v3,v4,nn1,nn2,nnode,resultsb,theta) & 
-!$OMP& shared(tree,Ndata,myid,output,odtheta,nmu,rmin,rmax)
+!$OMP& shared(tree,Ndata,Nrand,myid,output,odtheta,nmu,rmin,rmax)
 do i=istart,iend
 
-   call kdtree2_r_nearest_around_point(tp=tree,idxin=i,correltime=-1,r2=rmax*rmax,&
-&       nfound=nn2,nalloc=(Ndata),results=resultsb)
+  call kdtree2_r_nearest_around_point(tp=tree,idxin=i,correltime=-1,r2=rmax*rmax,&
+       nfound=nn2,nalloc=(Ndata+Nrand),results=resultsb)
+
+  if(rmin>0.0) then
+    nn1=kdtree2_r_count_around_point(tp=tree,idxin=i,correltime=-1,r2=rmin*rmin)  
+  else
+    nn1=1
+  endif
+  nnode=nn2-nn1
+
+  output(i)%nn=nnode
+
+  allocate(output(i)%id(nnode))
+  allocate(output(i)%dist(nnode))
+  allocate(output(i)%mu(nnode))
+
+  v2=my_array(:,i)
 
 !!!!!!NEW!!!!!!
-    if(rmin>0.0) then
-      nn1=kdtree2_r_count_around_point(tp=tree,idxin=i,correltime=-1,r2=rmin*rmin)  
-    else
-      nn1=1
-    endif
-    nnode=nn2-nn1
-!!!!!!NEW!!!!!!
-
-!!!!!!NEW!!!!!!
-     output(i)%nn=nnode
-!!!!!!NEW!!!!!!
-
-!!!!!!NEW!!!!!!
-    allocate(output(i)%id(nnode))
-    allocate(output(i)%dist(nnode))
-    allocate(output(i)%mu(nnode))
-!!!!!!NEW!!!!!!
-
-    v2=my_array(:,i)
-
-!!!!!!NEW!!!!!!
-    do j=nn1+1,nn2
-        k=j-nn1
+  do j=nn1+1,nn2
+    k=j-nn1
 !!!!!!NEW!!!!!!
         v1=my_array(:,resultsb(j)%idx)
 
@@ -352,9 +326,10 @@ do i=istart,iend
           v4=[v2(1)-v1(1),v2(2)-v1(2),v2(3)-v1(3)] ! connecting vector
           theta=v3(1)*v4(1) + v3(2)*v4(2) + v3(3)*v4(3)
           theta=(theta/((sqrt(v3(1)**2 + v3(2)**2 + v3(3)**2)) * (sqrt(v4(1)**2 +v4(2)**2 +v4(3)**2))))
+  
           output(i)%mu(k)=floor((theta+1.)*odtheta)+1
-          if(output(i)%mu(k)<=0) output(i)%mu(k)=1
-          if(output(i)%mu(k)>nmu) output(i)%mu(k)=nmu
+          !if(output(i)%mu(k)<=0) print*,'weird1'! output(i)%mu(k)=1
+          !if(output(i)%mu(k)>nmu) print*,'weird2'! output(i)%mu(k)=nmu
         else
           output(i)%mu(k)=1
         endif
@@ -379,326 +354,788 @@ do i=istart,iend
 enddo
 !$OMP END PARALLEL DO
 
-end subroutine
+end subroutine create_graph
 
 
-subroutine query_graph_single (ind1,ind2,ind3)
-integer*1 :: ind1,ind2,ind3
-integer :: count, m1,m2,m3
 
-mu1=1
-mu2=1
-
-!$OMP PARALLEL DO schedule(dynamic)  private(i,j,k,l,nn2,m1,m2,ind1,ind2,ind3,count) & ! , 
-!$OMP& shared(wgt1,gal,output,buffer,mu1,mu2)&
-!$OMP& reduction(+:Zddd,Zddr,Zdrr,Zrrr)
-do i=1,Ndata,1             ! begin loop over all data (and random) point
-  if(buffer(i)==1) cycle ! but skip if in buffer region
-
-    m1=output(i)%nn       ! open node A, m1 = # of neighbors
-
-    do j=1,m1             ! loop over neighbor list
-
-      if(output(i)%dist(j).eq.ind1) then !if 1st bin satisfied
-
-        m2=output(output(i)%id(j))%nn ! open node B, m2 = # of neighbors
-
-        do k=1,m2 ! loop over neighbor of neighbor 
-
-          if(output(output(i)%id(j))%dist(k).eq.ind2) then ! if 2nd bin satisfied 
-
-            do l=1,nn2 ! loop of neighbor of neighbor of neighbor 
-
-              if(output(i)%dist(l).eq.ind3 .and. output(i)%id(l)==output(output(i)%id(j))%id(k)) then 
-                !if 3rd bin satisfied and neighbor nighbor neighbor ID matches 1st point (complete triangle)
-
-                  count=gal(output(i)%id(j))+gal(output(i)%id(l))+gal(i)
-                  if (count==3) then 
-                     Zddd(ind1,ind2,ind3,mu1,mu2)=Zddd(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(output(i)%id(j))*wgt1(output(i)%id(l)))
-                  elseif (count==2) then
-                     Zddr(ind1,ind2,ind3,mu1,mu2)=Zddr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(output(i)%id(j))*wgt1(output(i)%id(l)))
-                  elseif (count==1) then
-                     Zdrr(ind1,ind2,ind3,mu1,mu2)=Zdrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(output(i)%id(j))*wgt1(output(i)%id(l)))
-                  elseif (count==0) then
-                     Zrrr(ind1,ind2,ind3,mu1,mu2)=Zrrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(output(i)%id(j))*wgt1(output(i)%id(l)))
-                  else
-                     print*,"weird triplet count"
-                  endif
-              endif
-            enddo
-           endif
-         enddo
-       endif 
-     enddo
- enddo
- !$OMP END PARALLEL DO
-end subroutine query_graph_single
-
-subroutine query_graph_single4 (ind1,ind2,ind3,ind4)
-integer*1 :: ind1,ind2,ind3,ind4
-integer :: count, m1,m2,m3,m4,id2,id3,id4,m
-
-mu1=1
-mu2=1
-
-
-!$OMP PARALLEL DO schedule(dynamic)  private(i,j,k,l,m,m1,m2,m3,m4,id2,id3,id4,count) & ! , 
-!$OMP& shared(wgt1,gal,output,buffer,mu1,mu2,ind1,ind2,ind3,ind4)&
-!$OMP& reduction(+:Zddd,Zddr,Zdrr,Zrrr)
-do i=1,Ndata,1             ! begin loop over all data (and random) point
-  if(buffer(i)==1) cycle ! but skip if in buffer region
-
-    m1=output(i)%nn       ! open node A, m1 = # of neighbors
-
-    do j=1,m1             ! loop over neighbor list
-
-      if(output(i)%dist(j).eq.ind1) then !if 1st bin satisfied
-        id2=output(i)%id(j)
-        m2=output(id2)%nn ! open node B, m2 = # of neighbors
-
-        do k=1,m2 ! loop over neighbor of neighbor 
-
-          if(output(id2)%dist(k).eq.ind2) then ! if 2nd bin satisfied 
-            id3=output(id2)%id(k)
-            m3=output(id3)%nn ! open node C, m3 = # of neighbors
-
-            do l=1,m3 ! loop of neighbor of neighbor of neighbor 
-
-              if(output(id3)%dist(l).eq.ind3) then
-                id4=output(id3)%id(l)
-                m4=output(id4)%nn ! open node D, m4 = # of neighbors
-
-                do m=1,m4
-
-                  if(i==output(id4)%id(m) .and. output(id4)%dist(m).eq.ind4) then
-
-                  count=gal(i)+gal(id2)+gal(id3)+gal(id4)
-
-                  if (count==4) then 
-                     Zddd(ind1,ind2,ind3,mu1,mu2)=Zddd(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(id2)*wgt1(id3)*wgt1(id4))
-                  elseif (count==3) then 
-                     Zddr(ind1,ind2,ind3,mu1,mu2)=Zddr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(id2)*wgt1(id3)*wgt1(id4))
-                  elseif (count==2) then
-                     Zddr(ind1,ind2,ind3,mu1,mu2)=Zddr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(id2)*wgt1(id3)*wgt1(id4))
-                  elseif (count==1) then
-                     Zdrr(ind1,ind2,ind3,mu1,mu2)=Zdrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(id2)*wgt1(id3)*wgt1(id4))
-                  elseif (count==0) then
-                     Zrrr(ind1,ind2,ind3,mu1,mu2)=Zrrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(id2)*wgt1(id3)*wgt1(id4))
-                  else
-                     print*,"weird triplet count"
-                  endif
-                  exit
-              endif
-            enddo
-           endif
-         enddo
-       endif 
-     enddo
-   endif
- enddo
- enddo
-!$OMP END PARALLEL DO
-
-end subroutine query_graph_single4
-
-subroutine query_graph_single3(ind1,ind2,ind3)
-integer*1 :: ind1,ind2,ind3
-integer :: count, m1,m2,m3,id2,id3,m
-
-mu1=1
-mu2=1
-
-
-!$OMP PARALLEL DO schedule(dynamic)  private(i,j,k,l,m,m1,m2,m3,id2,id3,count) & ! , 
-!$OMP& shared(wgt1,gal,output,buffer,mu1,mu2,ind1,ind2,ind3)&
-!$OMP& reduction(+:Zddd,Zddr,Zdrr,Zrrr)
-do i=1,Ndata,1             ! begin loop over all data (and random) point
-  if(buffer(i)==1) cycle ! but skip if in buffer region
-
-    m1=output(i)%nn       ! open node A, m1 = # of neighbors
-
-    do j=1,m1             ! loop over neighbor list
-
-      if(output(i)%dist(j).eq.ind1) then !if 1st bin satisfied
-        id2=output(i)%id(j)
-        m2=output(id2)%nn ! open node B, m2 = # of neighbors
-
-        do k=1,m2 ! loop over neighbor of neighbor 
-
-          if(output(id2)%dist(k).eq.ind2) then ! if 2nd bin satisfied 
-            id3=output(id2)%id(k)
-            m3=output(id3)%nn ! open node C, m3 = # of neighbors
-
-            do l=1,m3 ! loop of neighbor of neighbor of neighbor 
-
-              if(i==output(id3)%id(l) .and. output(id3)%dist(l).eq.ind3 ) then
-
-                  count=gal(i)+gal(id2)+gal(id3)
-
-                 if (count==3) then 
-                     Zddd(ind1,ind2,ind3,mu1,mu2)=Zddd(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(id2)*wgt1(id3))
-                  elseif (count==2) then
-                     Zddr(ind1,ind2,ind3,mu1,mu2)=Zddr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(id2)*wgt1(id3))
-                  elseif (count==1) then
-                     Zdrr(ind1,ind2,ind3,mu1,mu2)=Zdrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(id2)*wgt1(id3))
-                  elseif (count==0) then
-                     Zrrr(ind1,ind2,ind3,mu1,mu2)=Zrrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-                     &wgt1(id2)*wgt1(id3))
-                  else
-                     print*,"weird triplet count"
-                  endif
-                  exit
-           endif
-         enddo
-       endif 
-     enddo
-   endif
- enddo
- enddo
-!$OMP END PARALLEL DO
-
-end subroutine query_graph_single3
-
-subroutine query_graph_sorted ()
-integer nn3,idum,jdum, ninter,count
-if(myid==0) print*,'begin querying the graph'
-
-ninter=0
-
-!$OMP PARALLEL DO schedule(dynamic)  private(i,j,nn2,ind1,ind2,ind3,mu1,mu2,nodeid,nn3,idum,jdum,count) & ! , 
-!$OMP& shared(wgt1,gal,output,Nrand,myid,buffer)&
-!$OMP& reduction(+:Zddd,Zddr,Zdrr,Zrrr,Zdd,Zdr,Zrr)
-
-do i=1,Ndata,1             ! begin loop over all data (and random) point
+subroutine query_graph_2pcf (istart,iend)
+integer i,nn2,idum,jdum, ninter,k1,k2,k3,id1,istart,iend
+integer*1 ind1,mu
+if(myid==0) then
+  print*,'begin querying the graph'
+  print*,'number of mu bins:',nmu 
+endif
+!$OMP PARALLEL DO schedule(dynamic)  private(i,k1,nn2,id1,ind1,mu) & ! , 
+!$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer,nmu)&
+!$OMP& reduction(+:N2)
+do i=istart,iend             ! begin loop over all data points
     if(buffer(i)==1) cycle ! but skip if in buffer region
 
     nn2=output(i)%nn       ! open node nn2 = # of neighbors
-    
-    do j=1,nn2             ! loop over neighbor list
 
-        ind1=output(i)%dist(j)
-        mu1=output(i)%mu(j)  
-        
-        count=gal(output(i)%id(j))+gal(i)
-        if (count==2) then 
-            Zdd(ind1,mu1)=Zdd(ind1,mu1)+wgt1(i)*wgt1(output(i)%id(j))
-        elseif (count==1) then 
-            Zdr(ind1,mu1)=Zdr(ind1,mu1)+wgt1(i)*wgt1(output(i)%id(j))
-        elseif (count==0) then 
-            Zrr(ind1,mu1)=Zrr(ind1,mu1)+wgt1(i)*wgt1(output(i)%id(j))
-        endif
+    do k1=1,nn2
+      ind1=output(i)%dist(k1)   !edge
+      id1= output(i)%id(k1)
+      mu=1
+      if(RSD) mu=output(i)%mu(k1)
 
-        nodeid=output(i)%id(j)
-        nn3=output(nodeid)%nn
-
-        idum=1
-        jdum=1
-33      if (idum>nn2 .or. jdum>nn3) then
-            goto 34            
-        elseif (output(i)%id(idum) < output(nodeid)%id(jdum)) then        
-            idum=idum+1
-            goto 33
-        elseif (output(i)%id(idum) > output(nodeid)%id(jdum)) then
-            jdum=jdum+1
-            goto 33
-        elseif (output(i)%id(idum) == output(nodeid)%id(jdum)) then
-
-        ind2=output(nodeid)%dist(jdum)
-        mu2=output(nodeid)%mu(jdum)
-        ind3=output(i)%dist(idum) 
-
-      !if(ind1>nbins .or. ind2>nbins .or. ind3>nbins .or. mu1>nmu .or. mu2>nmu &
-      !&.or. ind1<1 .or. ind2<1 .or. ind3<1 .or. mu1<1 .or. mu2<1) then
-      !print*,'weird index',ind1,ind2,ind3,mu1,mu2
-      !print*,i,nodeid,output(nodeid)%id(jdum)
-      !endif
-
-!      count=gal(output(i)%id(idum))+gal(nodeid)+gal(i)
-      ! if (count==3) then 
-      !     Zddd(ind1,ind2,ind3,mu1,mu2)=Zddd(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-      !     &wgt1(output(i)%id(idum))*wgt1(nodeid))
-      ! elseif (count==2) then
-      !     Zddr(ind1,ind2,ind3,mu1,mu2)=Zddr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-      !     &wgt1(output(i)%id(idum))*wgt1(nodeid))
-      ! elseif (count==1) then
-      !     Zdrr(ind1,ind2,ind3,mu1,mu2)=Zdrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-      !     &wgt1(output(i)%id(idum))*wgt1(nodeid))
-      ! elseif (count==0) then
-      !     Zrrr(ind1,ind2,ind3,mu1,mu2)=Zrrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-      !     &wgt1(output(i)%id(idum))*wgt1(nodeid))
-      ! else
-      !   print*,"weird triplet count"
-      ! endif
-
-
-	 if (gal(output(i)%id(idum))==1) then
-	   if (gal(nodeid)==1) then
-		   if (gal(i)==1) then
-       Zddd(ind1,ind2,ind3,mu1,mu2)=Zddd(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-       &wgt1(output(i)%id(idum))*wgt1(nodeid))
-     		else
-      Zddr(ind1,ind2,ind3,mu1,mu2)=Zddr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-          &wgt1(output(i)%id(idum))*wgt1(nodeid)) 
-		  endif
-		else
-		   if (gal(i)==1) then
-      Zddr(ind1,ind2,ind3,mu1,mu2)=Zddr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&  
-      &wgt1(output(i)%id(idum))*wgt1(nodeid))
-                   else    
-			Zdrr(ind1,ind2,ind3,mu1,mu2)=Zdrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-		       &wgt1(output(i)%id(idum))*wgt1(nodeid))
-		  endif 		
-
-		endif
-
-	    else
-
-     if (gal(nodeid)==1) then
-       if (gal(i)==1) then
-      Zddr(ind1,ind2,ind3,mu1,mu2)=Zddr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-           &wgt1(output(i)%id(idum))*wgt1(nodeid))
-        else
-      Zdrr(ind1,ind2,ind3,mu1,mu2)=Zdrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-          &wgt1(output(i)%id(idum))*wgt1(nodeid)) 
+      if(i>Ndata .and. id1>Ndata) then
+        N3(ind1,mu,3)=N3(ind1,mu,3)+wgt1(i)*wgt1(id1)
       endif
-    else
-       if (gal(i)==1) then
-      Zdrr(ind1,ind2,ind3,mu1,mu2)=Zdrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-           &wgt1(output(i)%id(idum))*wgt1(nodeid))
-                   else    
-      Zrrr(ind1,ind2,ind3,mu1,mu2)=Zrrr(ind1,ind2,ind3,mu1,mu2)+(wgt1(i)*&
-           &wgt1(output(i)%id(idum))*wgt1(nodeid))
-      endif     
-	
-	    endif
-    endif
-
-            jdum=jdum+1
-            idum=idum+1
-!            ninter=ninter+1
-            goto 33
-        endif 
-34      continue
+      N2(ind1,mu,3)=N2(ind1,mu,3)+wgt1(i)*wgt1(id1)
 
     enddo
 enddo
 !$OMP END PARALLEL DO
-!if(myid==0)  print*, '# of triplets ', ninter
-deallocate(output)
 
-end subroutine query_graph_sorted
+if(myid==master) then
+outfile=trim(outfile)
+print*,'writing output to: ',  outfile
+open(11,file=outfile,status='unknown')
+write(11,*) 'r1 min, r1 max, r2 min, r2 max, NN, RR, 2pcf (xi)'
+
+do l=1,nbins
+    do k=1,nmu   
+
+        write(11,'(8(e14.7,1x))')rbin(l),rbin(l+1),((float(k)-1.)/odtheta)-1.,(float(k)/odtheta)-1.0,&
+             N2(l,k,3),N3(l,k,3),N2(l,k,3)/N3(l,k,3)
+
+    enddo
+enddo
+close(11)
+endif
+
+end subroutine query_graph_2pcf
+
+
+subroutine query_graph_equilateral_triangle (istart,iend)
+integer i,nn2,idum,jdum, ninter,k1,k2,k3,id1,id2,istart,iend
+integer*1 ind1,ind2,ind3
+if(myid==0) print*,'begin querying the graph'
+
+!$OMP PARALLEL DO schedule(dynamic)  private(i,k1,k2,k3,nn2,id1,id2,ind1,ind2,ind3) & ! , 
+!$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer)&
+!$OMP& reduction(+:N2)
+do i=istart,iend
+!do i=1,Ndata+Nrand,1             ! begin loop over all data (and random) point
+    if(buffer(i)==1) cycle ! but skip if in buffer region
+
+    nn2=output(i)%nn       ! open node nn2 = # of neighbors
+
+    do k1=1,nn2
+      ind1=output(i)%dist(k1)   !edge
+      id1=output(i)%id(k1)
+
+        do k2=k1,nn2
+          if(k2==k1)cycle
+          ind2=output(i)%dist(k2) !edge
+          if(ind1/=ind2) cycle
+
+          id2=output(i)%id(k2)
+          call find_dist(id1,id2,ind3) !edge
+          if(ind3/=ind1)cycle
+
+          if(RSD) then 
+            call find_normal(output(i)%mu(k1),output(i)%mu(k2),ind2)
+            N2(ind1,ind2,3)=N2(ind1,ind2,3)+wgt1(i)*wgt1(id1)*wgt1(id2)
+          else
+            if(i>Ndata .and. id1>Ndata .and. id2>Ndata) then
+              N3(ind1,1,3)=N3(ind1,1,3)-wgt1(i)*wgt1(id1)*wgt1(id2)
+            endif
+            N2(ind1,1,3)=N2(ind1,1,3)+wgt1(i)*wgt1(id1)*wgt1(id2)
+          endif
+
+        enddo 
+    enddo
+enddo
+!$OMP END PARALLEL DO
+
+
+if(myid==master) then
+outfile=trim(outfile)
+open(11,file=outfile,status='unknown')
+do l=1,nbins
+    do k=1,nmu   
+
+        write(11,'(8(e14.7,1x))')rbin(l),rbin(l+1),((float(k)-1.)/odtheta/2.),(float(k)/odtheta/2.),&
+             N2(l,k,3),N3(l,k,3),N2(l,k,3)/N3(l,k,3)
+
+    enddo
+enddo
+close(11)
+endif
+
+!deallocate(output)
+
+end subroutine query_graph_equilateral_triangle
+
+subroutine query_graph_3pcf_all (istart,iend)
+integer i,nn2,idum,jdum, ninter,k1,k2,k3,id1,id2,istart,iend,bin
+integer*1 ind1,ind2,ind3
+
+if(myid==0) print*,'Performing 3pcf (all configurations)'
+if(myid==0) print*,'begin querying the graph'
+
+!$OMP PARALLEL DO schedule(dynamic)  private(i,k1,k2,k3,nn2,id1,id2,ind1,ind2,ind3,bin) & ! , 
+!$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer)&
+!$OMP& reduction(+:N2)&
+!$OMP& reduction(+:N3)
+do i=istart,iend             ! begin loop over all data (and random) point
+    if(buffer(i)==1) cycle ! but skip if in buffer region
+
+    nn2=output(i)%nn       ! open node nn2 = # of neighbors
+
+    do k1=1,nn2
+      ind1=output(i)%dist(k1)   !edge
+      id1=output(i)%id(k1)
+
+        do k2=k1,nn2
+          if(k2==k1)cycle
+          ind2=output(i)%dist(k2) !edge
+          if(ind2==0) cycle
+
+          id2=output(i)%id(k2)
+          call find_dist(id1,id2,ind3) !edge
+          if(ind3==0)cycle
+
+          bin=bintable(ind1,ind2,ind3,1)
+
+          if(RSD) then 
+            call find_normal(output(i)%mu(k1),output(i)%mu(k2),ind2)
+            N2(bin,ind2,3)=N2(ind1,ind2,3)+wgt1(i)*wgt1(id1)*wgt1(id2)
+          else
+            if(i>Ndata .and. id1>Ndata .and. id2>Ndata) then
+              N3(bin,1,3)=N3(bin,1,3)-wgt1(i)*wgt1(id1)*wgt1(id2)
+            endif
+            N2(bin,1,3)=N2(bin,1,3)+wgt1(i)*wgt1(id1)*wgt1(id2)
+          endif
+
+        enddo 
+    enddo
+enddo
+!$OMP END PARALLEL DO
+
+if(myid==master) then
+outfile=trim(outfile)
+open(11,file=outfile,status='unknown')
+write(11,*) 'r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, NNN, RRR, 3pcf (zeta)'
+cbins=0
+do i =1,nbins
+  do j=i,nbins
+    do k=j,nbins
+      cbins=cbins+1
+      bintable(i,j,k,1)=cbins
+
+      write(11,'(9(e14.7,1x))')rbin(i),rbin(i+1),rbin(j),rbin(j+1),rbin(k),rbin(k+1),&
+      N2(cbins,1,3),N3(cbins,1,3),N2(cbins,1,3)/N3(cbins,1,3)
+
+      enddo
+    enddo
+enddo
+close(11)
+endif
+
+end subroutine query_graph_3pcf_all
+
+
+subroutine query_graph_tetrahedron (istart,iend)
+integer nn3,idum,jdum, ninter,k1,k2,k3,id1,id2,id3,id4
+integer*1 ind1,ind2,ind3,ind4,ind5,ind6,dum
+integer istart,iend
+if(myid==0) print*,'begin querying the graph'
+
+!$OMP PARALLEL DO schedule(dynamic)  private(dum,i,k1,k2,k3,nn2,id1,id2,id3,id4,ind1,ind2,ind3,ind4,ind5,ind6) & ! , 
+!$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer)&
+!$OMP& reduction(+:N2)&
+!$OMP& reduction(+:N3)
+do i=istart,iend
+    if(buffer(i)==1) cycle ! but skip if in buffer region
+
+    nn2=output(i)%nn       ! open node nn2 = # of neighbors
+
+    do k1=1,nn2
+      ind1=output(i)%dist(k1)   !edge
+      id1=output(i)%id(k1)
+
+
+        do k2=k1+1,nn2
+          ind2=output(i)%dist(k2) !inside
+          id2=output(i)%id(k2)
+          if(ind1/=ind2) cycle
+
+          call find_dist(id1,id2,ind4) !edge
+          if(ind4/=ind1)cycle
+
+            do k3=k2+1,nn2
+              ind3=output(i)%dist(k3) !edge
+              if(ind3/=ind1)cycle
+              id3 =output(i)%id(k3)
+
+
+              call find_dist(id2,id3,ind5) !edge
+              if(ind5/=ind1)cycle
+
+              call find_dist(id1,id3,ind6) !inside
+              if(ind1/=ind6) cycle
+          
+              if(i>Ndata) then
+                discN(ind1,1,1,6)=discN(ind1,1,1,6)+wgt1(i)*wgt1(id3)*wgt1(id1)
+                if(id3>Ndata .and. id1>Ndata) then
+                  discR(ind1,1,1,6)=discR(ind1,1,1,6)+wgt1(i)*wgt1(id3)*wgt1(id1)
+                endif
+              endif
+
+
+              if(id3>Ndata) then
+                discN(ind1,1,1,1)=discN(ind1,1,1,1)+wgt1(id3)*wgt1(i)*wgt1(id1)
+                if(i>Ndata .and. id1>Ndata) then
+                  discR(ind1,1,1,1)=discR(ind1,1,1,1)+wgt1(id3)*wgt1(i)*wgt1(id1)
+                endif
+              endif
+
+              if(i>Ndata) then
+                discN(ind1,1,1,4)=discN(ind1,1,1,4)+wgt1(i)*wgt1(id1)*wgt1(id2)
+                if(id1>Ndata .and. id2>Ndata) then
+                  discR(ind1,1,1,4)=discR(ind1,1,1,4)+wgt1(i)*wgt1(id1)*wgt1(id2)
+                endif
+              endif
+
+              if(id3>Ndata) then
+                discN(ind1,1,1,2)=discN(ind1,1,1,2)+wgt1(id3)*wgt1(i)*wgt1(id2)
+                if(i>Ndata .and. id2>Ndata) then
+                  discR(ind1,1,1,2)=discR(ind1,1,1,2)+wgt1(id3)*wgt1(i)*wgt1(id2)
+                endif
+              endif
+
+              if(id1>Ndata) then
+                discN(ind1,1,1,3)=discN(ind1,1,1,3)+wgt1(id1)*wgt1(i)*wgt1(id3)
+                if(i>Ndata .and. id3>Ndata) then
+                  discR(ind1,1,1,3)=discR(ind1,1,1,3)+wgt1(id1)*wgt1(i)*wgt1(id3)
+                endif
+              endif
+
+              if(i>Ndata) then
+                discN(ind1,1,1,5)=discN(ind1,1,1,5)+wgt1(i)*wgt1(id3)*wgt1(id2)
+                if(id3>Ndata .and. id2>Ndata) then
+                  discR(ind1,1,1,5)=discR(ind1,1,1,5)+wgt1(i)*wgt1(id3)*wgt1(id2)
+                endif
+              endif
+
+              N2(ind1,1,3)=N2(ind1,1,3)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(ind1,1,3)=N3(ind1,1,3)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+
+            enddo
+        enddo 
+    enddo
+enddo
+!$OMP END PARALLEL DO
+
+if(myid==master) then
+outfile=trim(outfile)
+open(11,file=outfile,status='unknown')
+do l=1,nbins
+    do k=1,nmu
+
+        write(11,'(9(e14.7,1x))')rbin(l),rbin(l+1),((float(k)-1.)/odtheta/2.),(float(k)/odtheta/2.),&
+             N2(l,k,3),N3(l,k,3),N2(l,k,3)/N3(l,k,3),&
+          (discN(l,1,1,1)/discR(l,1,1,1))*(discN(l,1,1,5)/discR(l,1,1,5))&
+        +(discN(l,1,1,3)/discR(l,1,1,3))*(discN(l,1,1,4)/discR(l,1,1,4))&
+        +(discN(l,1,1,2)/discR(l,1,1,2))*(discN(l,1,1,6)/discR(l,1,1,6))
+
+    enddo
+enddo
+close(11)
+endif
+
+end subroutine query_graph_tetrahedron
+
+subroutine query_4pcf_all2 (istart,iend)
+integer nn3,idum,jdum, ninter,k1,k2,k3,id1,id2,id3,id4
+integer*1 ind1,ind2,ind3,ind4,ind5,ind6,dum
+integer istart,iend,bin
+if(myid==0) print*,'begin querying the graph'
+
+!$OMP PARALLEL DO schedule(dynamic)  private(dum,i,k1,k2,k3,nn2,id1,id2,id3,id4,ind1,ind2,ind3,ind4,ind5,ind6,bin) & ! , 
+!$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer)&
+!$OMP& reduction(+:N2)&
+!$OMP& reduction(+:N3)
+do i=istart,iend
+    if(buffer(i)==1) cycle ! but skip if in buffer region
+
+    nn2=output(i)%nn       ! open node nn2 = # of neighbors
+    if(nn2<=3) cycle
+
+    do k1=1,nn2
+      ind1=output(i)%dist(k1)   !edge
+      id1=output(i)%id(k1)
+
+        do k2=k1+1,nn2
+          ind2=output(i)%dist(k2) !inside
+          id2=output(i)%id(k2)
+
+          call find_dist(id1,id2,ind4) !edge
+          if(ind4==0)cycle
+
+            do k3=k2+1,nn2 
+              ind3=output(i)%dist(k3) !edge
+              id3 =output(i)%id(k3)
+
+              call find_dist(id2,id3,ind5) !edge
+              if(ind5==0) cycle
+              call find_dist(id1,id3,ind6) !inside
+              if(ind6==0) cycle
+
+              ind2=1
+              ind6=1
+
+              bin=bintable(ind1,ind4,ind5,ind3)
+              !print*,bin
+              N2(bin,ind2,ind6)=N2(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(bin,ind2,ind6)=N3(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+              !bin=bintable(ind4,ind5,ind3,ind1)
+              !N2(bin,ind2,ind6)=N2(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+              !  N3(bin,ind2,ind6)=N3(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !endif
+
+              !bin=bintable(ind5,ind3,ind1,ind4)
+              !N2(bin,ind2,ind6)=N2(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+              !  N3(bin,ind2,ind6)=N3(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !endif
+
+              !bin=bintable(ind3,ind1,ind4,ind5)
+              !N2(bin,ind2,ind6)=N2(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+              !  N3(bin,ind2,ind6)=N3(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !endif
+
+              !bin=bintable(ind1,ind3,ind5,ind4)
+              !N2(bin,ind2,ind6)=N2(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+              !  N3(bin,ind2,ind6)=N3(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !endif
+
+              !bin=bintable(ind3,ind5,ind4,ind1)
+              !N2(bin,ind2,ind6)=N2(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+              !  N3(bin,ind2,ind6)=N3(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !endif
+
+              !bin=bintable(ind5,ind4,ind1,ind3)
+              !N2(bin,ind2,ind6)=N2(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+              !  N3(bin,ind2,ind6)=N3(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !endif
+
+              !bin=bintable(ind4,ind1,ind3,ind5)
+              !N2(bin,ind2,ind6)=N2(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+              !  N3(bin,ind2,ind6)=N3(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              !endif
+!!!!!!!!!!!!!!!!!
+              goto 1234
+
+              bin=bintable(ind1,ind4,ind5,ind3)
+              if(i>Ndata) then
+                !discN(bin,ind2,ind6,4)=discN(bin,ind2,ind6,4)+abs(wgt1(i))*wgt1(id1)*wgt1(id2)
+                discN(bin,ind2,ind6,4)=discN(bin,ind2,ind6,4)+wgt1(id1)*wgt1(id2)
+                if(id1>Ndata .and. id2>Ndata) then
+                  !discR(bin,ind2,ind6,4)=discR(bin,ind2,ind6,4)+abs(wgt1(i))*wgt1(id1)*wgt1(id2)
+                  discR(bin,ind2,ind6,4)=discR(bin,ind2,ind6,4)+wgt1(id1)*wgt1(id2)
+                endif
+              endif
+              if(i>Ndata) then
+                !discN(bin,ind2,ind6,5)=discN(bin,ind2,ind6,5)+abs(wgt1(i))*wgt1(id3)*wgt1(id2)
+                discN(bin,ind2,ind6,5)=discN(bin,ind2,ind6,5)+wgt1(id3)*wgt1(id2)
+                if(id3>Ndata .and. id2>Ndata) then
+                  !discR(bin,ind2,ind6,5)=discR(bin,ind2,ind6,5)+abs(wgt1(i))*wgt1(id3)*wgt1(id2)
+                  discR(bin,ind2,ind6,5)=discR(bin,ind2,ind6,5)+wgt1(id3)*wgt1(id2)
+                endif
+              endif
+              if(i>Ndata) then
+                !discN(bin,ind2,ind6,6)=discN(bin,ind2,ind6,6)+abs(wgt1(i))*wgt1(id3)*wgt1(id1)
+                discN(bin,ind2,ind6,6)=discN(bin,ind2,ind6,6)+wgt1(id3)*wgt1(id1)
+                if(id3>Ndata .and. id1>Ndata) then
+                  !discR(bin,ind2,ind6,6)=discR(bin,ind2,ind6,6)+abs(wgt1(i))*wgt1(id3)*wgt1(id1)
+                  discR(bin,ind2,ind6,6)=discR(bin,ind2,ind6,6)+wgt1(id3)*wgt1(id1)
+                endif
+              endif
+              if(id3>Ndata) then
+                !discN(bin,ind2,ind6,2)=discN(bin,ind2,ind6,2)+abs(wgt1(id3))*wgt1(i)*wgt1(id2)
+                discN(bin,ind2,ind6,2)=discN(bin,ind2,ind6,2)+wgt1(i)*wgt1(id2)
+                if(i>Ndata .and. id2>Ndata) then
+                  !discR(bin,ind2,ind6,2)=discR(bin,ind2,ind6,2)+abs(wgt1(id3))*wgt1(i)*wgt1(id2)
+                  discR(bin,ind2,ind6,2)=discR(bin,ind2,ind6,2)+wgt1(i)*wgt1(id2)
+                endif
+              endif
+              if(id3>Ndata) then
+                !discN(bin,ind2,ind6,1)=discN(bin,ind2,ind6,1)+abs(wgt1(id3))*wgt1(i)*wgt1(id1)
+                discN(bin,ind2,ind6,1)=discN(bin,ind2,ind6,1)+wgt1(i)*wgt1(id1)
+                if(i>Ndata .and. id1>Ndata) then
+                  !discR(bin,ind2,ind6,1)=discR(bin,ind2,ind6,1)+abs(wgt1(id3))*wgt1(i)*wgt1(id1)
+                  discR(bin,ind2,ind6,1)=discR(bin,ind2,ind6,1)+wgt1(i)*wgt1(id1)
+                endif
+              endif
+              if(id1>Ndata) then
+                !discN(bin,ind2,ind6,3)=discN(bin,ind2,ind6,3)+abs(wgt1(id1))*wgt1(i)*wgt1(id3)
+                discN(bin,ind2,ind6,3)=discN(bin,ind2,ind6,3)+wgt1(i)*wgt1(id3)
+                if(i>Ndata .and. id3>Ndata) then
+                  !discR(bin,ind2,ind6,3)=discR(bin,ind2,ind6,3)+abs(wgt1(id1))*wgt1(i)*wgt1(id3)
+                  discR(bin,ind2,ind6,3)=discR(bin,ind2,ind6,3)+wgt1(i)*wgt1(id3)
+                endif
+              endif
+1234 continue
+
+!!!!!!!!!!!!!!!!!
+            enddo
+        enddo 
+    enddo
+enddo
+
+!$OMP END PARALLEL DO
+
+if(myid==master) then
+outfile=trim(outfile)
+open(11,file=outfile,status='unknown')
+write(11,*) 'r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, r4 min, r4 max, NNNN, RRRR, 4pcf (eta)'
+cbins=0
+do i=1,nbins
+  do j=i,nbins
+    do k=j,nbins
+      do l=k,nbins
+        !cbins=cbins+1
+        cbins=bintable(i,j,k,l)
+        !do k1=1,nbins
+        !  do k2=k1,nbins
+        k1=1
+        k2=1
+        write(11,'(12(e14.7,1x))') rbin(i),rbin(i+1),rbin(j),rbin(j+1),rbin(k),rbin(k+1),rbin(l),rbin(l+1),&
+        !rbin(k1),rbin(k1+1),rbin(k2),rbin(k2+1),&
+        N2(cbins,k1,k2),N3(cbins,k1,k2),(N2(cbins,k1,k2)/N3(cbins,k1,k2))!,&
+        !(discN(cbins,k1,k2,1)/discR(cbins,k1,k2,1))*(discN(cbins,k1,k2,5)/discR(cbins,k1,k2,5))&
+        !+(discN(cbins,k1,k2,3)/discR(cbins,k1,k2,3))*(discN(cbins,k1,k2,4)/discR(cbins,k1,k2,4))&
+        !+(discN(cbins,k1,k2,2)/discR(cbins,k1,k2,2))*(discN(cbins,k1,k2,6)/discR(cbins,k1,k2,6))
+        !  enddo
+        !enddo
+        enddo
+      enddo
+    enddo
+enddo
+close(11)
+endif
+
+
+end subroutine query_4pcf_all2
+
+subroutine query_4pcf_all (istart,iend)
+integer nn3,idum,jdum, ninter,k1,k2,k3,id1,id2,id3,id4
+integer*1 ind1,ind2,ind3,ind4,ind5,ind6,dum
+integer istart,iend,bin,bin2
+real tmp1,tmp2,tmp3,tmp4,tmp5,tmp6,tmp7
+if(myid==0) print*,'begin querying the graph'
+
+!$OMP PARALLEL DO schedule(dynamic)  private(dum,i,k1,k2,k3,nn2,id1,id2,id3,id4,ind1,ind2,ind3,ind4,ind5,ind6,bin,bin2) & ! , 
+!$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer)&
+!$OMP& reduction(+:N2)&
+!$OMP& reduction(+:N3)
+do i=istart,iend
+    if(buffer(i)==1) cycle ! but skip if in buffer region
+
+    nn2=output(i)%nn       ! open node nn2 = # of neighbors
+
+    do k1=1,nn2
+      ind1=output(i)%dist(k1)   !edge
+      id1=output(i)%id(k1)
+
+        do k2=k1+1,nn2
+          ind2=output(i)%dist(k2) !inside
+          id2=output(i)%id(k2)
+
+          call find_dist(id1,id2,ind4) !edge
+          if(ind4==0)cycle
+
+            do k3=k2+1,nn2 
+              ind3=output(i)%dist(k3) !edge
+              id3 =output(i)%id(k3)
+
+              call find_dist(id2,id3,ind5) !edge
+              if(ind5==0)cycle
+              call find_dist(id1,id3,ind6) !inside
+              if(ind6==0) cycle
+
+
+              bin=bintable(ind1,ind2,ind3,1)
+              bin=ind1+(ind2-1)*nbins+(ind3-1)*nbins**2+(ind4-1)*nbins**3+(ind5-1)*nbins**4+(ind6-1)*nbins**5
+              !bin2=bintable(ind4,ind5,ind6,1)
+              bin2=ind4+(ind5-1)*nbins+(ind6-1)*nbins*nbins
+              !print*,bin
+
+              call binner(ind1,ind4,ind5,ind3,ind2,ind6,bin)
+              N2(bin,1,1)=N2(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(bin,1,1)=N3(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+              call binner(ind4,ind5,ind3,ind1,ind6,ind2,bin)
+              N2(bin,1,1)=N2(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(bin,1,1)=N3(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+              call binner(ind5,ind3,ind1,ind4,ind2,ind6,bin)
+              N2(bin,1,1)=N2(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(bin,1,1)=N3(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+              call binner(ind3,ind1,ind4,ind5,ind6,ind2,bin)
+              N2(bin,1,1)=N2(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(bin,1,1)=N3(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+              call binner(ind3,ind5,ind4,ind1,ind2,ind6,bin)
+              N2(bin,1,1)=N2(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(bin,1,1)=N3(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+              call binner(ind5,ind4,ind1,ind3,ind6,ind2,bin)
+              N2(bin,1,1)=N2(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(bin,1,1)=N3(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+              call binner(ind4,ind1,ind3,ind5,ind2,ind6,bin)
+              N2(bin,1,1)=N2(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(bin,1,1)=N3(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+              call binner(ind1,ind3,ind5,ind4,ind6,ind2,bin)
+              N2(bin,1,1)=N2(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(bin,1,1)=N3(bin,1,1)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+!!!!!!!!!!!!!!!!!
+              !bin=bintable(ind1,ind2,ind3,1)
+              if(i>Ndata) then
+                discN(ind4,1,1,1)=discN(ind4,1,1,1)+abs(wgt1(i))*wgt1(id1)*wgt1(id2)
+                if(id1>Ndata .and. id2>Ndata) then
+                  discR(ind4,1,1,1)=discR(ind4,1,1,1)+abs(wgt1(i))*wgt1(id1)*wgt1(id2)
+                endif
+              endif
+              if(i>Ndata) then
+                discN(ind5,1,1,1)=discN(ind5,1,1,1)+abs(wgt1(i))*wgt1(id3)*wgt1(id2)
+                if(id3>Ndata .and. id2>Ndata) then
+                  discR(ind5,1,1,1)=discR(ind5,1,1,1)+abs(wgt1(i))*wgt1(id3)*wgt1(id2)
+                endif
+              endif
+              if(i>Ndata) then
+                discN(ind6,1,1,1)=discN(ind6,1,1,1)+abs(wgt1(i))*wgt1(id3)*wgt1(id1)
+                if(id3>Ndata .and. id1>Ndata) then
+                  discR(ind6,1,1,1)=discR(ind6,1,1,1)+abs(wgt1(i))*wgt1(id3)*wgt1(id1)
+                endif
+              endif
+              if(id3>Ndata) then
+                discN(ind2,1,1,1)=discN(ind2,1,1,1)+abs(wgt1(id3))*wgt1(i)*wgt1(id2)
+                if(i>Ndata .and. id2>Ndata) then
+                  discR(ind2,1,1,1)=discR(ind2,1,1,1)+abs(wgt1(id3))*wgt1(i)*wgt1(id2)
+                endif
+              endif
+              if(id3>Ndata) then
+                discN(ind1,1,1,1)=discN(ind1,1,1,1)+abs(wgt1(id3))*wgt1(i)*wgt1(id1)
+                if(i>Ndata .and. id1>Ndata) then
+                  discR(ind1,1,1,1)=discR(ind1,1,1,1)+abs(wgt1(id3))*wgt1(i)*wgt1(id1)
+                endif
+              endif
+              if(id1>Ndata) then
+                discN(ind3,1,1,1)=discN(ind3,1,1,1)+abs(wgt1(id1))*wgt1(i)*wgt1(id3)
+                if(i>Ndata .and. id3>Ndata) then
+                  discR(ind3,1,1,1)=discR(ind3,1,1,1)+abs(wgt1(id1))*wgt1(i)*wgt1(id3)
+                endif
+              endif
+
+!!!!!!!!!!!!!!!!!
+            enddo
+        enddo 
+    enddo
+enddo
+!$OMP END PARALLEL DO
+
+if(myid==master) then
+outfile=trim(outfile)
+open(11,file=outfile,status='unknown')
+cbins=0
+do i=1,nbins   !edge
+    do j=i,nbins !edge
+      do k=j,nbins !edge
+        do l=k,nbins !edge
+          tmp1=0.0
+          tmp2=0.0
+          tmp3=0.0
+          tmp4=0.0
+          tmp5=0.0
+          tmp6=0.0
+          tmp7=0.0
+
+          do m=1,nbins
+          do n=1,nbins
+          cbins=cbins+1
+        !bin=bintable(i,j,k,1)
+        !bin2=bintable(l,m,n,1)
+        !bin2=n+(m-1)*nbins+(l-1)*nbins*nbins
+        bin=i+(j-1)*nbins+(k-1)*nbins**2+(l-1)*nbins**3+(m-1)*nbins**4+(n-1)*nbins**5
+
+        k1=1
+        k2=1
+
+        !tmp1=tmp1+N2(bin,1,1)
+        !tmp2=tmp2+N3(bin,1,1)
+        !tmp3=tmp3+discN(j,k1,k2,1)
+        !tmp4=tmp4+discR(j,k1,k2,1)
+        !tmp5=tmp5+discN(n,k1,k2,1)
+        !tmp6=tmp6+discR(n,k1,k2,1)
+
+        if(N2(bin,1,k2)==0) cycle
+        if(N3(bin,1,k2)==0) cycle
+
+        tmp3=N2(bin,1,k2)/N3(bin,1,k2)
+
+        tmp4=(discN(i,k1,k2,1)/discR(i,k1,k2,1))*(discN(k,k1,k2,1)/discR(k,k1,k2,1))
+        tmp5=(discN(j,k1,k2,1)/discR(j,k1,k2,1))*(discN(l,k1,k2,1)/discR(l,k1,k2,1))
+        tmp6=(discN(m,k1,k2,1)/discR(m,k1,k2,1))*(discN(n,k1,k2,1)/discR(n,k1,k2,1))
+        !print*,tmp3,tmp4,tmp5,tmp6
+
+        if(tmp3==tmp3 .and. abs(tmp3)>0.0 .and. tmp4==tmp4 .and. abs(tmp4)>0.0 .and. &
+          tmp5==tmp5 .and. abs(tmp5)>0.0 .and. tmp6==tmp6 .and. abs(tmp6)>0.0  ) then
+          tmp2=tmp2+1.
+        tmp1=tmp1+(N2(bin,1,k2)/N3(bin,1,k2))-(discN(i,k1,k2,1)/discR(i,k1,k2,1))*(discN(k,k1,k2,1)/discR(k,k1,k2,1))&
+        -(discN(j,k1,k2,1)/discR(j,k1,k2,1))*(discN(l,k1,k2,1)/discR(l,k1,k2,1))&
+        -(discN(m,k1,k2,1)/discR(m,k1,k2,1))*(discN(n,k1,k2,1)/discR(n,k1,k2,1))
+        tmp7=tmp7+(N2(bin,1,k2)/N3(bin,1,k2))
+        endif 
+        !write(11,'(16(e14.7,1x))') rbin(i),rbin(i+1),rbin(j),rbin(j+1),rbin(k),rbin(k+1),rbin(l),rbin(l+1),&
+        !rbin(m),rbin(m+1),rbin(n),rbin(n+1),&
+        !N2(bin,1,k2),N3(bin,1,k2),(N2(bin,1,k2)/N3(bin,1,k2)),&
+        !(discN(i,k1,k2,1)/discR(i,k1,k2,1))*(discN(k,k1,k2,1)/discR(k,k1,k2,1))&
+        !+(discN(j,k1,k2,1)/discR(j,k1,k2,1))*(discN(l,k1,k2,1)/discR(l,k1,k2,1))&
+        !+(discN(m,k1,k2,1)/discR(m,k1,k2,1))*(discN(n,k1,k2,1)/discR(n,k1,k2,1))
+          enddo
+        enddo
+        write(11,'(16(e14.7,1x))') rbin(i),rbin(i+1),rbin(j),rbin(j+1),rbin(k),rbin(k+1),rbin(l),rbin(l+1),&
+        rbin(m),rbin(m+1),rbin(n),rbin(n+1),&
+        tmp1/tmp2,tmp7/tmp2!#,tmp1/tmp2,&
+        !(discN(i,k1,k2,1)/discR(i,k1,k2,1))*(discN(m,k1,k2,1)/discR(m,k1,k2,1))&
+        !+(tmp3/tmp4)*(tmp5/tmp6)&
+        !+(discN(k,k1,k2,1)/discR(k,k1,k2,1))*(discN(l,k1,k2,1)/discR(l,k1,k2,1))
+
+        enddo
+      enddo
+    enddo
+enddo
+close(11)
+endif
+
+end subroutine query_4pcf_all
+
+subroutine binner(i,j,k,l,m,n,bin)
+  integer*1 :: i,j,k,l,m,n
+  integer*4 :: bin
+  bin=i+(j-1)*nbins+(k-1)*nbins**2+(l-1)*nbins**3+(m-1)*nbins**4+(n-1)*nbins**5
+
+end subroutine
+
+
+subroutine query_graph_bipyramid (istart,iend)
+integer nn3,idum,jdum, ninter,k1,k2,k3,id1,id2,id3,id4
+integer*1 ind1,ind2,ind3,ind4,ind5,ind6,dum
+integer istart,iend
+if(myid==0) print*,'begin querying the graph'
+
+!$OMP PARALLEL DO schedule(dynamic)  private(dum,i,k1,k2,k3,nn2,id1,id2,id3,id4,ind1,ind2,ind3,ind4,ind5,ind6) & ! , 
+!$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer)&
+!$OMP& reduction(+:N2)&
+!$OMP& reduction(+:N3)
+do i=istart,iend
+!do i=1,Ndata+Nrand,1             ! begin loop over all data (and random) point
+    if(buffer(i)==1) cycle ! but skip if in buffer region
+    
+    !do j=1,nbins
+    !  N3(j,1,3)=N3(j,1,3)+sum(wgt1(output(i)%id(pack(output(i)%dist(:),output(i)%dist(:)==j))))**2
+    !enddo
+
+    !cycle
+
+
+    nn2=output(i)%nn       ! open node nn2 = # of neighbors
+
+    do k1=1,nn2
+      ind1=output(i)%dist(k1)   !edge
+      id1=output(i)%id(k1)
+
+        do k2=k1+1,nn2
+          !if(k2==k1)cycle
+          ind2=output(i)%dist(k2) !inside
+          if(ind1/=ind2) cycle
+
+          id2=output(i)%id(k2)
+          call find_dist(id1,id2,ind4) !edge
+          if(ind4/=ind1)cycle
+
+            do k3=k2+1,nn2
+              !if(k3==k2)cycle
+              !if(k3==k1)cycle
+              ind3=output(i)%dist(k3) !edge
+              if(ind3/=ind1)cycle
+              id3 =output(i)%id(k3)
+
+              call find_dist(id2,id3,ind5) !edge
+              if(ind5/=ind1)cycle
+              call find_dist(id1,id3,ind6) !inside
+              if(ind1/=ind6) cycle
+
+              N2(ind1,1,3)=N2(ind1,1,3)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
+                N3(ind1,1,3)=N3(ind1,1,3)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
+              endif
+
+
+
+            enddo
+        enddo 
+    enddo
+enddo
+!$OMP END PARALLEL DO
+
+if(myid==master) then
+outfile=trim(outfile)
+open(11,file=outfile,status='unknown')
+do l=1,nbins
+    do k=1,nmu   
+        if(logbins) then
+        write(11,'(8(e14.7,1x))')10**((l-1)*dr+lrmin),10**(l*dr+lrmin),&
+                                 ((float(k)-1.)/odtheta)-1.,(float(k)/odtheta)-1.,&
+             N2(l,k,3),N3(l,k,3),N2(l,k,3)/N3(l,k,3)
+        else
+        write(11,'(8(e14.7,1x))')(l-1)*dr+rmin,l*dr+rmin,((float(k)-1.)/odtheta/2.),(float(k)/odtheta/2.),&
+             N2(l,k,3),N3(l,k,3),N2(l,k,3)/N3(l,k,3)
+        endif
+    enddo
+enddo
+close(11)
+endif
+
+end subroutine query_graph_bipyramid
+
 
  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
    subroutine parseOptions ()
@@ -731,6 +1168,7 @@ end subroutine query_graph_sorted
             file1 = trim(arg)
             i=i+2
          case ('-ran')
+            rancat=.true.
             call getArgument(i+1,arg)
             file2 = trim(arg)
             i=i+2
@@ -787,6 +1225,25 @@ end subroutine query_graph_sorted
             call print_help
             stop
 
+          case ('-tetra')
+            four_pcf_tetra=.true.
+            i=i+1
+
+          case ('-3pcf')
+            three_pcf=.true.
+            i=i+1
+
+          case ('-4pcf')
+            four_pcf=.true.
+            i=i+1
+          case ('-equi')
+            three_pcf_eq=.true.
+            i=i+1
+
+          case ('-2pcf')
+            two_pcf=.true.
+            i=i+1
+
          case default
             print '("unknown option ",a6," ignored")', opt
             stop
@@ -802,11 +1259,11 @@ print*,'PURPOSE: Code for calculating the 3PCF of a 3D point set. '
 print*,'     '
 print*,'     '
 print*,'CALLING SEQUENCE:'
-print*,'      gramsci [-out out_file] [-wgt WGT]'
+print*,'      Ngramsci[-gal galaxy file][-ran ranfile (optional)]'
 print*,'           [-rmin Rmin] [-rmax Rmax] [-nbins Nbins] '
-print*,'           [-RSD RSD] [-nmu Nmu] '
+print*,'           [-RSD RSD] [-nmu Nmu] [-out out_file]'
 print*,' '
-print*,'      eg: gramsci -rmin 10.0 -rmax 12.0 -nmu 10 -nbins 10 -wgt -rsd '
+print*,'      eg: Ngramsci -rmin 10.0 -rmax 12.0 -nbins 10 [choose one: -2pcf -3pcf -4pcf'
 print*,' '
 print*,'INPUTS:'
 print*,'   '
@@ -820,9 +1277,6 @@ print*,'OPTIONAL:'
 print*,'       Nbins = Number of radial bins to calculate'
 print*,' '
 print*,'       Nmu = Number of angular (mu) bins - linear in range -1<mu<+1'
-print*,' '
-print*,'       WGT = logical value to define if weights are to be included '
-print*,'              In this case, the input gal/ran files should be 4 columns '
 print*,' '
 print*,'       RSD = logical value to request anisotropic analysis.'
 print*,'              In this case the number of angular bins Nmu should be set'
@@ -849,6 +1303,7 @@ end subroutine count_files
 subroutine count_files_2 ()
 implicit none
   Ndata=0
+  Nrand=0
   open(11,file=file1,status='unknown')
 16 continue
   read(11,*,err=16,end=17)aux
@@ -856,13 +1311,16 @@ implicit none
   goto 16
 17 close(11)
 
+if(rancat) then
   open(11,file=file2,status='unknown')
 18 continue
-  read(11,*,err=18,end=19)aux
-  Ndata=Ndata+1
-  goto 18
-19 close(11)
-  if(myid==0) print*,'Preparing to read ',Ndata, 'data points'
+   read(11,*,err=18,end=19)aux
+   Nrand=Nrand+1
+   goto 18
+ 19 close(11)
+endif
+if(myid==0) print*,'Preparing to read ',Ndata, 'data points'
+if(myid==0) print*,'Preparing to read ',Nrand, 'random points'
 end subroutine count_files_2
 
 subroutine read_files ()
@@ -871,213 +1329,185 @@ implicit none
 if(myid==0)  print*, 'opening ',trim(file1)
 open(11,file=file1,status='unknown')
 do i=1,Ndata
-  if ( wgt ) then
     if ( cut ) then
-     read(11,*,end=14)my_array(1:3,i),wgt1(i),gal(i),buffer(i)
+     read(11,*,end=14)my_array(1:3,i),wgt1(i),buffer(i)
     else
-     read(11,*,end=14)my_array(1:3,i),wgt1(i),gal(i)
+     read(11,*,end=14)my_array(1:3,i),wgt1(i)
      buffer(i)=0.0
     endif
-  else
-    if ( cut ) then
-      read(11,*,end=14)my_array(1:3,i),gal(i),buffer(i)
-      wgt1(i)=1.0
-    else
-      read(11,*,end=14)my_array(1:3,i),gal(i)
-      wgt1(i)=1.0
-      buffer(i)=0.0
-    endif
- endif
 enddo
 14 close(11)
 if(myid==0)  print*,'Finished reading data file'  
-if(myid==0)  print*, 'there are ',sum(gal),' galaxies'
-if(myid==0)  print*, 'there are ',Ndata-sum(gal),' randoms'
+!if(myid==0)  print*, 'there are ',sum(gal),' galaxies'
+!if(myid==0)  print*, 'there are ',Ndata-sum(gal),' randoms'
 
 
 if(myid==0)  print*, 'there are ',Ndata-sum(buffer),' data points inside buffer'
-
-
-!if(wgt) then
-!    wgt1=wgt1/100000.0000000000
-!    wgt1(1:Ndata)=wgt1(1:Ndata)/sum(wgt1(1:Ndata))
-!    wgt1(Ndata+1:Ndata+Nrand)=wgt1(Ndata+1:Ndata+Nrand)/sum(wgt1(Ndata+1:Ndata+Nrand))
-!endif
 end subroutine read_files
 
 subroutine read_files_2 ()
 implicit none
 
-i=1
 if(myid==0)  print*, 'opening ',trim(file1)
 open(11,file=file1,status='unknown')
-20 continue
-  if ( wgt ) then
-    read(11,*,err=20,end=21)my_array(1:3,i),wgt1(i)
-    gal(i)=1
-    buffer(i)=0
-  else
-    read(11,*,err=20,end=21)my_array(1:3,i)
-    gal(i)=1
-    wgt1(i)=1.0
-    buffer(i)=0
-    endif
-  i=i+1
-goto 20
+!20 continue
+20 do i=1,Ndata
+  read(11,*,err=20,end=21)my_array(1:3,i),wgt1(i)
+  buffer(i)=0
+
+enddo 
 21 close(11)
 
+if(rancat) then
 if(myid==0)  print*, 'opening ',trim(file2)
 open(11,file=file2,status='unknown')
-22 continue
-  if ( wgt ) then
-    if(i>Ndata) goto 23
-    read(11,*,err=22,end=23)my_array(1:3,i),wgt1(i)
-    gal(i)=0
-    buffer(i)=0
-  else
-    if(i>Ndata) goto 23
-    read(11,*,err=22,end=23)my_array(1:3,i)
-    gal(i)=0
-    wgt1(i)=1.0
-    buffer(i)=0
-  endif
-  i=i+1
-goto 22
+
+22 do i=Ndata+1,Ndata+Nrand
+  read(11,*,err=22,end=23)my_array(1:3,i),wgt1(i)
+  buffer(i)=0
+enddo
 23 close(11)
+endif
+
+!normalise!!
+
+wgt1(1:Ndata)=wgt1(1:Ndata)/sum(wgt1(1:Ndata))
+wgt1(Ndata+1:Ndata+Nrand)=-1.d0*wgt1(Ndata+1:Ndata+Nrand)/sum(wgt1(Ndata+1:Ndata+Nrand))
 
 if(myid==0)  print*,'Finished reading data file'  
-if(myid==0)  print*, 'there are ',sum(gal),' galaxies'
-if(myid==0)  print*, 'there are ',Ndata-sum(gal),' randoms'
+if(myid==0)  print*, 'sum of weights: ',sum(wgt1)
 
-!if(wgt) then
-!    wgt1=wgt1/100000.0000000000
-!    wgt1(1:Ndata)=wgt1(1:Ndata)/sum(wgt1(1:Ndata))
-!    wgt1(Ndata+1:Ndata+Nrand)=wgt1(Ndata+1:Ndata+Nrand)/sum(wgt1(Ndata+1:Ndata+Nrand))
-!endif
 end subroutine read_files_2
 
+subroutine create_binlookup()
+integer i,j,k,l,m,n
 
+
+if(four_pcf) then
+allocate(bintable(nbins,nbins,nbins,nbins))
+cbins=0
+!do i =1,nbins
+!  do j=i,nbins
+!    do k=j,nbins
+!      do l=k,nbins
+do i =1,nbins
+  do j=i,nbins
+    do k=j,nbins
+      do l=k,nbins
+        cbins=cbins+1
+        bintable(i,j,k,l)=cbins
+
+        bintable(i,j,l,k)=cbins
+        bintable(i,k,j,l)=cbins
+        bintable(i,k,l,j)=cbins
+        bintable(i,l,j,k)=cbins
+        bintable(i,l,k,j)=cbins
+        bintable(j,i,k,l)=cbins
+        bintable(j,i,l,k)=cbins
+        bintable(j,k,i,l)=cbins
+        bintable(j,k,l,i)=cbins
+        bintable(j,l,i,k)=cbins
+        bintable(j,l,k,i)=cbins
+        bintable(k,i,j,l)=cbins
+        bintable(k,i,l,j)=cbins
+        bintable(k,j,i,l)=cbins
+        bintable(k,j,l,i)=cbins
+        bintable(k,l,i,j)=cbins
+        bintable(k,l,j,i)=cbins
+        bintable(l,i,j,k)=cbins
+        bintable(l,i,k,j)=cbins
+        bintable(l,j,i,k)=cbins
+        bintable(l,j,k,i)=cbins
+        bintable(l,k,i,j)=cbins
+        bintable(l,k,j,i)=cbins
+      enddo
+    enddo
+  enddo
+enddo
+
+!cbins=0
+!do i =1,nbins
+!  do j=i,nbins
+!    do k=j,nbins
+!      cbins=cbins+1
+!      bintable(i,j,k,1)=cbins
+!      bintable(i,k,j,1)=cbins
+!      bintable(j,i,k,1)=cbins
+!      bintable(j,k,i,1)=cbins
+!      bintable(k,i,j,1)=cbins
+!      bintable(k,j,i,1)=cbins
+!    enddo
+!  enddo
+!enddo
+
+elseif(three_pcf) then
+  allocate(bintable(nbins,nbins,nbins,1))
+cbins=0
+do i =1,nbins
+  do j=i,nbins
+    do k=j,nbins
+      cbins=cbins+1
+      bintable(i,j,k,1)=cbins
+      bintable(i,k,j,1)=cbins
+      bintable(j,i,k,1)=cbins
+      bintable(j,k,i,1)=cbins
+      bintable(k,i,j,1)=cbins
+      bintable(k,j,i,1)=cbins
+    enddo
+  enddo
+enddo
+endif
+
+end subroutine create_binlookup
 
 subroutine allocate_arrays ()
   implicit none
-  allocate(resultsb(Ndata))
+  allocate(resultsb(Ndata+Nrand))
 
-  allocate(Zddd(nbins,nbins,nbins,nmu,nmu))
-  allocate(Zddr(nbins,nbins,nbins,nmu,nmu))
-  allocate(Zdrr(nbins,nbins,nbins,nmu,nmu))
-  allocate(Zrrr(nbins,nbins,nbins,nmu,nmu))
-  allocate(crap(nbins,nbins,nbins,nmu,nmu))
+  !allocate(N3(nbins,nbins,nbins,nmu,nmu,4))
+  !allocate(N3_tmp(nbins,nbins,nbins,nmu,nmu,4))
   
-  allocate(Zdd(nbins,nmu))
-  allocate(Zdr(nbins,nmu))
-  allocate(Zrr(nbins,nmu))
-  allocate(crap2(nbins,nmu))
+  if(four_pcf) then 
+    !allocate(N2(nbins**6,1,1))
+    !allocate(N3(nbins**6,1,1))
+    allocate(N2(cbins,1,1))
+    allocate(N3(cbins,1,1))
+  else
+    allocate(N2(cbins,nmu,3))
+    allocate(N3(cbins,nmu,3))
+  endif
+  !allocate(N2_tmp(cbins,nmu,3))
   
-  crap=0.0d0
-  Zddd=0.0d0
-  Zddr=0.0d0
-  Zdrr=0.0d0
-  Zrrr=0.0d0
-  Zdd=0.0d0
-  Zdr=0.0d0
-  Zrr=0.0d0
-  crap2=0.0d0
+  !N3_tmp=0.0d0
+  N3=0.0d0
+
+  N2=0.0d0
+  !N2_tmp=0.0d0
 
 end subroutine allocate_arrays
 
 subroutine mpi_collect()
 #ifdef MPI
-  if(myid==master) crap=0.d0
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-call MPI_REDUCE( Zddd, crap, nbins*nbins*nbins*nmu*nmu, MPI_DOUBLE_PRECISION,MPI_SUM, master, MPI_COMM_WORLD, ierr )
-if ( myid == master ) then !in master thread
-Zddd=crap
-endif
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
+!if(myid==master) N3_tmp=0.d0
+!call MPI_Barrier(MPI_COMM_WORLD,ierr)
+!call MPI_REDUCE( N3, N3_tmp, nbins*nbins*nbins*nmu*nmu*4, MPI_DOUBLE_PRECISION,MPI_SUM, master, MPI_COMM_WORLD, ierr )
+!if ( myid == master ) then !in master thread
+!N3=N3_tmp
+!endif
+!call MPI_Barrier(MPI_COMM_WORLD,ierr)
 
-if(myid==master) crap=0.d0
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-call MPI_REDUCE( Zddr, crap, nbins*nbins*nbins*nmu*nmu, MPI_DOUBLE_PRECISION,MPI_SUM, master, MPI_COMM_WORLD, ierr )
-if ( myid == master ) then !in master thread
-Zddr=crap
-endif
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-
-if(myid==master) crap=0.d0
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-call MPI_REDUCE( Zdrr, crap, nbins*nbins*nbins*nmu*nmu, MPI_DOUBLE_PRECISION,MPI_SUM, master, MPI_COMM_WORLD, ierr )
-if ( myid == master ) then !in master thread
-Zdrr=crap
-endif
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-
-if(myid==master) crap=0.d0
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-call MPI_REDUCE( Zrrr, crap, nbins*nbins*nbins*nmu*nmu, MPI_DOUBLE_PRECISION,MPI_SUM, master, MPI_COMM_WORLD, ierr )
-if ( myid == master ) then !in master thread
-Zrrr=crap
-endif
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-
-if(myid==master) crap2=0.d0
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-call MPI_REDUCE( Zdd, crap2, nbins*nmu, MPI_DOUBLE_PRECISION,MPI_SUM, master, MPI_COMM_WORLD, ierr )
-if ( myid == master ) then !in master thread
-Zdd=crap2
-endif
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-
-if(myid==master) crap2=0.d0
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-call MPI_REDUCE( Zdr, crap2, nbins*nmu, MPI_DOUBLE_PRECISION,MPI_SUM, master, MPI_COMM_WORLD, ierr )
-if ( myid == master ) then !in master thread
-Zdr=crap2
-endif
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-
-if(myid==master) crap2=0.d0
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
-call MPI_REDUCE( Zrr, crap2, nbins*nmu, MPI_DOUBLE_PRECISION,MPI_SUM, master, MPI_COMM_WORLD, ierr )
-if ( myid == master ) then !in master thread
-Zrr=crap2
-endif
-call MPI_Barrier(MPI_COMM_WORLD,ierr)
+!if(myid==master) N2_tmp=0.d0
+!call MPI_Barrier(MPI_COMM_WORLD,ierr)
+!call MPI_REDUCE( N2, N2_tmp, nbins*nmu*3, MPI_DOUBLE_PRECISION,MPI_SUM, master, MPI_COMM_WORLD, ierr )
+!if ( myid == master ) then !in master thread
+!N2=N2_tmp
+!endif
+!call MPI_Barrier(MPI_COMM_WORLD,ierr)
 
 #endif
 
 end subroutine
 
-subroutine normalise_counts()
-!  real :: avgal,avran
-  if ( wgt ) then
-    ndd=sum(wgt1,mask = gal .EQ. 1)
-    nrr=sum(wgt1,mask = gal .EQ. 0)
-    avgal=ndd/sum(gal)
-    avran=nrr/(Ndata-sum(gal))
-    print*,'weighted # of galaxies / average',ndd, avgal
-    print*,'weighted # of randoms / average',nrr, avran
-    Zddd=Zddd/(ndd*(ndd-avgal)*(ndd-2*avgal))
-    Zrrr=Zrrr/(nrr*(nrr-avran)*(nrr-2*avran))
-    Zddr=Zddr/(3.d0*ndd*(ndd-avgal)*nrr)
-    Zdrr=Zdrr/(3.d0*ndd*nrr*(nrr-avran))
-    
-    Zdd=Zdd/(ndd*(ndd-avgal))
-    Zdr=Zdr/(2*ndd*nrr)
-    Zrr=Zrr/(nrr*(nrr-avran))
-else
-   ndd=float(Ndata)
-   nrr=float(Nrand)
-   Zddd=Zddd/(ndd*(ndd-1.)*(ndd-2.))
-   Zddr=Zddr/(3*ndd*(ndd-1.)*nrr)
-   Zdrr=Zdrr/(3*ndd*nrr*(nrr-1.))
-   Zrrr=Zrrr/(nrr*(nrr-1.)*(nrr-2.))
-   
-    Zdd=Zdd/(ndd*(ndd-1.))
-    Zdr=Zdr/(2*ndd*nrr)
-    Zrr=Zrr/(nrr*(nrr-1.))
-endif
-
-end subroutine
 
 SUBROUTINE dist(vv1,vv2,d)
 implicit none
@@ -1092,16 +1522,11 @@ subroutine deallocate_arrays()
 implicit none
 
 if (allocated(my_array)) deallocate(my_array)
-if (allocated(Zddd)) deallocate(Zddd)
-if (allocated(Zddr)) deallocate(Zddr)
-if (allocated(Zdrr)) deallocate(Zdrr)
-if (allocated(Zrrr)) deallocate(Zrrr)
-if (allocated(crap)) deallocate(crap)
+!if (allocated(N3)) deallocate(N3)
+!if (allocated(N3_tmp)) deallocate(N3_tmp)
 
-if (allocated(Zdd)) deallocate(Zdd)
-if (allocated(Zdr)) deallocate(Zdr)
-if (allocated(Zrr)) deallocate(Zrr)
-if (allocated(crap2)) deallocate(crap2)
+if (allocated(N2)) deallocate(N2)
+!if (allocated(N2_tmp)) deallocate(N2_tmp)
 
 if (allocated(wgt1)) deallocate(wgt1)
 if (allocated(v1)) deallocate(v1)
@@ -1113,12 +1538,80 @@ if (allocated(resultsb)) deallocate(resultsb)
 
 end subroutine deallocate_arrays
 
+subroutine find_dist2(id1,id2,ind)
+implicit none
+integer i
+INTEGER, INTENT(IN)                :: id1, id2
+INTEGER*1, INTENT(OUT)                :: ind
+
+if(output(id1)%id(1)>id2 .or. output(id1)%id(output(id1)%nn)<id2) then
+  ind=0
+  return
+endif
+
+ind=0
+  do i=1,output(id1)%nn
+    if(output(id1)%id(i)==id2) then
+      ind=output(id1)%dist(i)
+      return
+    endif
+  enddo 
+end subroutine
+
+
+
+subroutine find_dist(id1,id2, ind) !Binary chopper. Find i such that X = A(i)
+  implicit none
+  integer i
+  INTEGER, INTENT(IN)                :: id1, id2
+  INTEGER*1, INTENT(OUT)                :: ind
+  INTEGER L,R,P    !Fingers.
+
+        
+  if(id1<=0)then
+          print*, 'weird!!! wtf'
+          print*,id1
+        endif
+
+        if(output(id1)%id(1)>id2 .or. output(id1)%id(output(id1)%nn)<id2) then
+          ind=0
+          return
+        endif
+
+        L = 0     !Establish outer bounds, to search A(L+1:R-1).
+        R = output(id1)%nn + 1   !L = first - 1; R = last + 1.
+    1   P = (R - L)/2   !Probe point. Beware INTEGER overflow with (L + R)/2.
+        IF (P.LE.0) GO TO 5 !Aha! Nowhere!! The span is empty.
+        P = P + L   !Convert an offset from L to an array index.
+        IF (id2 - output(id1)%id(P)) 3,4,2 !Compare to the probe point.
+    2   L = P     !A(P) < X. Shift the left bound up: X follows A(P).
+        GO TO 1     !Another chop.
+    3   R = P     !X < A(P). Shift the right bound down: X precedes A(P).
+        GO TO 1     !Try again.
+    4   ind = output(id1)%dist(P)   !A(P) = X. So, X is found, here!
+       RETURN     !Done.
+    5   ind = 0   !X is not found. Insert it at L + 1, i.e. at A(1 - FINDI).
+      END SUBROUTINE  !A's values need not be all different, merely in order. 
+
+subroutine find_normal(mu1,mu2,mun)
+implicit none 
+INTEGER*1, INTENT(in)                :: mu1,mu2
+INTEGER*1, INTENT(OUT)                :: mun
+real :: mu11,mu22
+
+  mu11=((mu1-0.5)/odtheta) -1.0 !+ 1./nmu
+  mu22=((mu2-0.5)/odtheta) -1.0 !+ 1./nmu
+  
+  mun=floor((1.1547*(0.75 - mu11*mu11 - mu22*mu22 + (mu11*mu22))**0.5)*nmu)+1
+  !print*,mu11,mu22,((.75 - mu11*mu11 - mu22*mu22 + (mu11*mu22))),mun
+  !print*,mu1,mu11,mu2,mu22,(0.75 - mu11*mu11 - mu22*mu22 + mu11*mu22),1.1547*(0.75 - mu11*mu11 - mu22*mu22 + mu11*mu22)**0.5,mun
+end subroutine find_normal
 
 subroutine default_params()
 
   d=3
   cut=.false.
-  wgt=.false.
+  wgt=.true.
   logbins=.false.
   nbins=0
   rmin=0.0
@@ -1131,6 +1624,14 @@ subroutine default_params()
   
   loadran=.false.
   saveran=.false.
+  rancat=.false.
+
+  four_pcf_tetra=.false.
+  four_pcf_box=.false.
+  three_pcf_eq=.false.
+  three_pcf=.false.
+  four_pcf=.false.
+  two_pcf=.false.
 
 end subroutine default_params
 
@@ -1154,25 +1655,6 @@ end subroutine default_params
       FindMinimum = Location
    END FUNCTION  FindMinimum
 
-   !  INTEGER FUNCTION  FindMinimumr(x, Start, End)
-   !    IMPLICIT  NONE
-   !    real*8, DIMENSION(1:), INTENT(IN) :: x
-   !    INTEGER, INTENT(IN)                :: Start, End
-   !    real*8                               :: Minimum
-   !    INTEGER                            :: Location
-   !    INTEGER                            :: i
-
-   !    Minimum  = x(Start)
-   !    Location = Start
-   !    DO i = Start+1, End
-   !       IF (x(i) < Minimum) THEN
-   !          Minimum  = x(i)
-   !          Location = i
-   !       END IF
-   !    END DO
-   !    FindMinimumr = Location
-   ! END FUNCTION  FindMinimumr
-
 ! --------------------------------------------------------------------
 ! SUBROUTINE  Swap():
 !    This subroutine swaps the values of its two formal arguments.
@@ -1187,14 +1669,7 @@ end subroutine default_params
       a    = b
       b    = Temp
    END SUBROUTINE  Swap
-   ! SUBROUTINE  Swapr(a, b)
-   !    IMPLICIT  NONE
-   !    real*8, INTENT(INOUT) :: a, b
-   !    real*8                :: Temp
-   !    Temp = a
-   !    a    = b
-   !    b    = Temp
-   ! END SUBROUTINE  Swapr
+
    SUBROUTINE  Swap2(a, b)
       IMPLICIT  NONE
       INTEGER*1, INTENT(INOUT) :: a, b
@@ -1210,21 +1685,6 @@ end subroutine default_params
 !    This subroutine receives an array x() and sorts it into ascending
 ! order.
 ! --------------------------------------------------------------------
-
-   ! SUBROUTINE  Sort(x,y,z, Size)
-   !    IMPLICIT  NONE
-   !    real*8, DIMENSION(1:), INTENT(INOUT) :: x,y,z
-   !    INTEGER, INTENT(IN)                   :: Size
-   !    INTEGER                               :: i
-   !    INTEGER                               :: Location
-
-   !    DO i = 1, Size-1
-   !       Location = FindMinimumr(x, i, Size)
-   !       CALL  Swapr(x(i), x(Location))
-   !       CALL  Swapr(y(i), y(Location))
-   !       CALL  Swapr(z(i), z(Location))
-   !    END DO
-   ! END SUBROUTINE  Sort
 
 
    SUBROUTINE  Sort2(x,y,z, Size)
@@ -1243,6 +1703,21 @@ end subroutine default_params
       END DO
    END SUBROUTINE  Sort2
 
+    SUBROUTINE  Sort3(x,y, Size)
+      IMPLICIT  NONE
+      INTEGER, DIMENSION(1:), INTENT(INOUT) :: x
+      INTEGER*1, DIMENSION(1:), INTENT(INOUT) :: y
+      INTEGER, INTENT(IN)                   :: Size
+      INTEGER                               :: i
+      INTEGER                               :: Location
+
+      DO i = 1, Size-1
+         Location = FindMinimum(x, i, Size)
+         CALL  Swap(x(i), x(Location))
+         CALL  Swap2(y(i), y(Location))
+      END DO
+   END SUBROUTINE  Sort3
+
 character(len=20) function str(k)
 !   "Convert an integer to string."
     integer, intent(in) :: k
@@ -1250,4 +1725,4 @@ character(len=20) function str(k)
     str = adjustl(str)
 end function str
 
-end program  ThreePCF
+end program  Ngramsci
