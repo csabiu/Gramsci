@@ -367,7 +367,7 @@ if(myid==0) then
 endif
 !$OMP PARALLEL DO schedule(dynamic)  private(i,k1,nn2,id1,ind1,mu) & ! , 
 !$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer,nmu)&
-!$OMP& reduction(+:N2)
+!$OMP& reduction(+:N2,N3)
 do i=istart,iend             ! begin loop over all data points
     if(buffer(i)==1) cycle ! but skip if in buffer region
 
@@ -415,7 +415,7 @@ if(myid==0) print*,'begin querying the graph'
 
 !$OMP PARALLEL DO schedule(dynamic)  private(i,k1,k2,k3,nn2,id1,id2,ind1,ind2,ind3) & ! , 
 !$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer)&
-!$OMP& reduction(+:N2)
+!$OMP& reduction(+:N2,N3)
 do i=istart,iend
 !do i=1,Ndata+Nrand,1             ! begin loop over all data (and random) point
     if(buffer(i)==1) cycle ! but skip if in buffer region
@@ -660,8 +660,7 @@ if(myid==0) print*,'begin querying the graph'
 
 !$OMP PARALLEL DO schedule(dynamic)  private(dum,i,k1,k2,k3,nn2,id1,id2,id3,id4,ind1,ind2,ind3,ind4,ind5,ind6,bin) & ! , 
 !$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer)&
-!$OMP& reduction(+:N2)&
-!$OMP& reduction(+:N3)
+!$OMP& reduction(+:N2,N3,discN,discR)
 do i=istart,iend
     if(buffer(i)==1) cycle ! but skip if in buffer region
 
@@ -688,10 +687,12 @@ do i=istart,iend
               call find_dist(id1,id3,ind6) !inside
               if(ind6==0) cycle
 
-              ind2=1
-              ind6=1
+              !ind2=1
+              !ind6=1
 
               bin=bintable(ind1,ind4,ind5,ind3)
+              if(bin<=0) cycle
+
               !print*,bin
               N2(bin,ind2,ind6)=N2(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
               if(i>Ndata .and. id1>Ndata .and. id2>Ndata .and. id3>Ndata ) then
@@ -740,52 +741,69 @@ do i=istart,iend
               !  N3(bin,ind2,ind6)=N3(bin,ind2,ind6)+wgt1(i)*wgt1(id1)*wgt1(id2)*wgt1(id3)
               !endif
 !!!!!!!!!!!!!!!!!
-              goto 1234
+              !goto 1234
 
-              bin=bintable(ind1,ind4,ind5,ind3)
-              if(i>Ndata) then
+              !bin=bintable(ind1,ind4,ind5,ind3)
+              if(i>Ndata ) then
                 !discN(bin,ind2,ind6,4)=discN(bin,ind2,ind6,4)+abs(wgt1(i))*wgt1(id1)*wgt1(id2)
-                discN(bin,ind2,ind6,4)=discN(bin,ind2,ind6,4)+wgt1(id1)*wgt1(id2)
+                !if(id1<Ndata .and. id2<Ndata) then
+                  discN(bin,ind2,ind6,4)=discN(bin,ind2,ind6,4)+wgt1(id1)*wgt1(id2)
+                !endif
                 if(id1>Ndata .and. id2>Ndata) then
                   !discR(bin,ind2,ind6,4)=discR(bin,ind2,ind6,4)+abs(wgt1(i))*wgt1(id1)*wgt1(id2)
                   discR(bin,ind2,ind6,4)=discR(bin,ind2,ind6,4)+wgt1(id1)*wgt1(id2)
                 endif
               endif
-              if(i>Ndata) then
+
+              if(i>Ndata ) then
                 !discN(bin,ind2,ind6,5)=discN(bin,ind2,ind6,5)+abs(wgt1(i))*wgt1(id3)*wgt1(id2)
-                discN(bin,ind2,ind6,5)=discN(bin,ind2,ind6,5)+wgt1(id3)*wgt1(id2)
+                !if(id3<Ndata .and. id2<Ndata) then
+                  discN(bin,ind2,ind6,5)=discN(bin,ind2,ind6,5)+wgt1(id3)*wgt1(id2)
+                !endif
                 if(id3>Ndata .and. id2>Ndata) then
                   !discR(bin,ind2,ind6,5)=discR(bin,ind2,ind6,5)+abs(wgt1(i))*wgt1(id3)*wgt1(id2)
                   discR(bin,ind2,ind6,5)=discR(bin,ind2,ind6,5)+wgt1(id3)*wgt1(id2)
                 endif
               endif
+
               if(i>Ndata) then
                 !discN(bin,ind2,ind6,6)=discN(bin,ind2,ind6,6)+abs(wgt1(i))*wgt1(id3)*wgt1(id1)
-                discN(bin,ind2,ind6,6)=discN(bin,ind2,ind6,6)+wgt1(id3)*wgt1(id1)
+                !if(id3<Ndata .and. id1<Ndata) then
+                  discN(bin,ind2,ind6,6)=discN(bin,ind2,ind6,6)+wgt1(id3)*wgt1(id1)
+               !endif
                 if(id3>Ndata .and. id1>Ndata) then
                   !discR(bin,ind2,ind6,6)=discR(bin,ind2,ind6,6)+abs(wgt1(i))*wgt1(id3)*wgt1(id1)
                   discR(bin,ind2,ind6,6)=discR(bin,ind2,ind6,6)+wgt1(id3)*wgt1(id1)
                 endif
               endif
+
               if(id3>Ndata) then
                 !discN(bin,ind2,ind6,2)=discN(bin,ind2,ind6,2)+abs(wgt1(id3))*wgt1(i)*wgt1(id2)
-                discN(bin,ind2,ind6,2)=discN(bin,ind2,ind6,2)+wgt1(i)*wgt1(id2)
+                !if(i<Ndata .and. id2<Ndata) then
+                  discN(bin,ind2,ind6,2)=discN(bin,ind2,ind6,2)+wgt1(i)*wgt1(id2)
+                !endif
                 if(i>Ndata .and. id2>Ndata) then
                   !discR(bin,ind2,ind6,2)=discR(bin,ind2,ind6,2)+abs(wgt1(id3))*wgt1(i)*wgt1(id2)
                   discR(bin,ind2,ind6,2)=discR(bin,ind2,ind6,2)+wgt1(i)*wgt1(id2)
                 endif
               endif
+
               if(id3>Ndata) then
                 !discN(bin,ind2,ind6,1)=discN(bin,ind2,ind6,1)+abs(wgt1(id3))*wgt1(i)*wgt1(id1)
-                discN(bin,ind2,ind6,1)=discN(bin,ind2,ind6,1)+wgt1(i)*wgt1(id1)
+                !if(i<Ndata .and. id1<Ndata) then
+                  discN(bin,ind2,ind6,1)=discN(bin,ind2,ind6,1)+wgt1(i)*wgt1(id1)
+                !endif
                 if(i>Ndata .and. id1>Ndata) then
                   !discR(bin,ind2,ind6,1)=discR(bin,ind2,ind6,1)+abs(wgt1(id3))*wgt1(i)*wgt1(id1)
                   discR(bin,ind2,ind6,1)=discR(bin,ind2,ind6,1)+wgt1(i)*wgt1(id1)
                 endif
               endif
+
               if(id1>Ndata) then
                 !discN(bin,ind2,ind6,3)=discN(bin,ind2,ind6,3)+abs(wgt1(id1))*wgt1(i)*wgt1(id3)
-                discN(bin,ind2,ind6,3)=discN(bin,ind2,ind6,3)+wgt1(i)*wgt1(id3)
+                !if(i<Ndata .and. id3<Ndata) then
+                  discN(bin,ind2,ind6,3)=discN(bin,ind2,ind6,3)+wgt1(i)*wgt1(id3)
+                !endif
                 if(i>Ndata .and. id3>Ndata) then
                   !discR(bin,ind2,ind6,3)=discR(bin,ind2,ind6,3)+abs(wgt1(id1))*wgt1(i)*wgt1(id3)
                   discR(bin,ind2,ind6,3)=discR(bin,ind2,ind6,3)+wgt1(i)*wgt1(id3)
@@ -802,6 +820,7 @@ enddo
 !$OMP END PARALLEL DO
 
 if(myid==master) then
+print*,'finished counting'
 outfile=trim(outfile)
 open(11,file=outfile,status='unknown')
 write(11,*) 'r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, r4 min, r4 max, NNNN, RRRR, 4pcf (eta)'
@@ -812,18 +831,18 @@ do i=1,nbins
       do l=k,nbins
         !cbins=cbins+1
         cbins=bintable(i,j,k,l)
-        !do k1=1,nbins
-        !  do k2=k1,nbins
-        k1=1
-        k2=1
-        write(11,'(12(e14.7,1x))') rbin(i),rbin(i+1),rbin(j),rbin(j+1),rbin(k),rbin(k+1),rbin(l),rbin(l+1),&
+        do k1=1,nbins
+          do k2=1,nbins
+        !k1=1
+        !k2=1
+        write(11,'(17(e14.7,1x))') rbin(i),rbin(i+1),rbin(j),rbin(j+1),rbin(k),rbin(k+1),rbin(l),rbin(l+1),&
         !rbin(k1),rbin(k1+1),rbin(k2),rbin(k2+1),&
-        N2(cbins,k1,k2),N3(cbins,k1,k2),(N2(cbins,k1,k2)/N3(cbins,k1,k2))!,&
-        !(discN(cbins,k1,k2,1)/discR(cbins,k1,k2,1))*(discN(cbins,k1,k2,5)/discR(cbins,k1,k2,5))&
-        !+(discN(cbins,k1,k2,3)/discR(cbins,k1,k2,3))*(discN(cbins,k1,k2,4)/discR(cbins,k1,k2,4))&
-        !+(discN(cbins,k1,k2,2)/discR(cbins,k1,k2,2))*(discN(cbins,k1,k2,6)/discR(cbins,k1,k2,6))
-        !  enddo
-        !enddo
+        N2(cbins,k1,k2),N3(cbins,k1,k2),(N2(cbins,k1,k2)/N3(cbins,k1,k2)),&
+        (discN(cbins,k1,k2,1)/discR(cbins,k1,k2,1))*(discN(cbins,k1,k2,5)/discR(cbins,k1,k2,5))&
+        ,(discN(cbins,k1,k2,3)/discR(cbins,k1,k2,3))*(discN(cbins,k1,k2,4)/discR(cbins,k1,k2,4))&
+        ,(discN(cbins,k1,k2,2)/discR(cbins,k1,k2,2))*(discN(cbins,k1,k2,6)/discR(cbins,k1,k2,6))
+          enddo
+        enddo
         enddo
       enddo
     enddo
@@ -843,8 +862,7 @@ if(myid==0) print*,'begin querying the graph'
 
 !$OMP PARALLEL DO schedule(dynamic)  private(dum,i,k1,k2,k3,nn2,id1,id2,id3,id4,ind1,ind2,ind3,ind4,ind5,ind6,bin,bin2) & ! , 
 !$OMP& shared(wgt1,output,Ndata,Nrand,myid,buffer)&
-!$OMP& reduction(+:N2)&
-!$OMP& reduction(+:N3)
+!$OMP& reduction(+:N2,N3,discN,discR)
 do i=istart,iend
     if(buffer(i)==1) cycle ! but skip if in buffer region
 
@@ -1397,29 +1415,29 @@ do i =1,nbins
         cbins=cbins+1
         bintable(i,j,k,l)=cbins
 
-        bintable(i,j,l,k)=cbins
-        bintable(i,k,j,l)=cbins
-        bintable(i,k,l,j)=cbins
-        bintable(i,l,j,k)=cbins
-        bintable(i,l,k,j)=cbins
-        bintable(j,i,k,l)=cbins
-        bintable(j,i,l,k)=cbins
-        bintable(j,k,i,l)=cbins
-        bintable(j,k,l,i)=cbins
-        bintable(j,l,i,k)=cbins
-        bintable(j,l,k,i)=cbins
-        bintable(k,i,j,l)=cbins
-        bintable(k,i,l,j)=cbins
-        bintable(k,j,i,l)=cbins
-        bintable(k,j,l,i)=cbins
-        bintable(k,l,i,j)=cbins
-        bintable(k,l,j,i)=cbins
-        bintable(l,i,j,k)=cbins
-        bintable(l,i,k,j)=cbins
-        bintable(l,j,i,k)=cbins
-        bintable(l,j,k,i)=cbins
-        bintable(l,k,i,j)=cbins
-        bintable(l,k,j,i)=cbins
+        !bintable(i,j,l,k)=cbins
+        !bintable(i,k,j,l)=cbins
+        !bintable(i,k,l,j)=cbins
+        !bintable(i,l,j,k)=cbins
+        !bintable(i,l,k,j)=cbins
+        !bintable(j,i,k,l)=cbins
+        !bintable(j,i,l,k)=cbins
+        !bintable(j,k,i,l)=cbins
+        !bintable(j,k,l,i)=cbins
+        !bintable(j,l,i,k)=cbins
+        !bintable(j,l,k,i)=cbins
+        !bintable(k,i,j,l)=cbins
+        !bintable(k,i,l,j)=cbins
+        !bintable(k,j,i,l)=cbins
+        !bintable(k,j,l,i)=cbins
+        !bintable(k,l,i,j)=cbins
+        !bintable(k,l,j,i)=cbins
+        !bintable(l,i,j,k)=cbins
+        !bintable(l,i,k,j)=cbins
+        !bintable(l,j,i,k)=cbins
+        !bintable(l,j,k,i)=cbins
+        !bintable(l,k,i,j)=cbins
+        !bintable(l,k,j,i)=cbins
       enddo
     enddo
   enddo
@@ -1470,8 +1488,8 @@ subroutine allocate_arrays ()
   if(four_pcf) then 
     !allocate(N2(nbins**6,1,1))
     !allocate(N3(nbins**6,1,1))
-    allocate(N2(cbins,1,1))
-    allocate(N3(cbins,1,1))
+    allocate(N2(cbins,cbins,cbins))
+    allocate(N3(cbins,cbins,cbins))
   else
     allocate(N2(cbins,nmu,3))
     allocate(N3(cbins,nmu,3))
