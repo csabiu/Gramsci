@@ -502,7 +502,11 @@ do i=istart,iend             ! begin loop over all data (and random) point
 
           if(RSD) then 
             call find_normal(output(i)%mu(k1),output(i)%mu(k2),ind2)
-            N2(bin,ind2,3)=N2(ind1,ind2,3)+wgt1(i)*wgt1(id1)*wgt1(id2)
+            !N2(bin,ind2,3)=N2(ind1,ind2,3)+wgt1(i)*wgt1(id1)*wgt1(id2)
+            if(i>Ndata .and. id1>Ndata .and. id2>Ndata) then
+              N3(bin,ind2,3)=N3(bin,ind2,3)-wgt1(i)*wgt1(id1)*wgt1(id2)
+            endif
+              N2(bin,ind2,3)=N2(bin,ind2,3)+wgt1(i)*wgt1(id1)*wgt1(id2)
           else
             if(i>Ndata .and. id1>Ndata .and. id2>Ndata) then
               N3(bin,1,3)=N3(bin,1,3)-wgt1(i)*wgt1(id1)*wgt1(id2)
@@ -518,7 +522,12 @@ enddo
 if(myid==master) then
 outfile=trim(outfile)
 open(11,file=outfile,status='unknown')
-write(11,*) 'r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, NNN, RRR, 3pcf (zeta)'
+if(RSD) then
+  write(11,*) 'r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, mu min, mu max, NNN, RRR, 3pcf (zeta)'
+else
+  write(11,*) 'r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, NNN, RRR, 3pcf (zeta)'
+endif
+
 cbins=0
 do i =1,nbins
   do j=i,nbins
@@ -526,8 +535,15 @@ do i =1,nbins
       cbins=cbins+1
       bintable(i,j,k,1)=cbins
 
-      write(11,'(9(e14.7,1x))')rbin(i),rbin(i+1),rbin(j),rbin(j+1),rbin(k),rbin(k+1),&
-      N2(cbins,1,3),N3(cbins,1,3),N2(cbins,1,3)/N3(cbins,1,3)
+      if(RSD) then
+        do l=1,nmu
+          write(11,'(11(e14.7,1x))')rbin(i),rbin(i+1),rbin(j),rbin(j+1),rbin(k),rbin(k+1),&
+          ((float(l)-1.)/odtheta/2.),(float(l)/odtheta/2.),N2(cbins,l,3),N3(cbins,l,3),N2(cbins,l,3)/N3(cbins,l,3)
+        enddo
+      else
+        write(11,'(9(e14.7,1x))')rbin(i),rbin(i+1),rbin(j),rbin(j+1),rbin(k),rbin(k+1),&
+        N2(cbins,1,3),N3(cbins,1,3),N2(cbins,1,3)/N3(cbins,1,3)
+      endif
 
       enddo
     enddo
@@ -1209,6 +1225,7 @@ end subroutine query_graph_bipyramid
          case ('-nmu')
             call getArgument(i+1,arg)
             read (arg,*) nmu
+            if(nmu>=2) RSD=.true.
             i=i+2
          case ('-rsd')
             RSD=.true.
