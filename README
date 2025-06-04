@@ -65,3 +65,15 @@ INPUTS:
                  i.e. N=3 -> 27 regions
    
        Rmax = Max. radial seperation
+
+BUILDING
+--------
+A Fortran compiler such as `gfortran` is required. To build the executables run:
+
+```
+cd src
+make all
+```
+
+This will compile the code and place the `gramsci` and `domain_decomposition`
+executables in the `bin/` directory.
