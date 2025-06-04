@@ -313,43 +313,37 @@ do i=istart,iend
 
   v2=my_array(:,i)
 
-!!!!!!NEW!!!!!!
+  k=0       ! count of valid neighbors added
   do j=nn1+1,nn2
-    k=j-nn1
-!!!!!!NEW!!!!!!
         v1=my_array(:,resultsb(j)%idx)
 
         call dist(v1,my_array(:,i),vec_dist)
+
+        if(vec_dist<=rmin) cycle
+        if(vec_dist>=rmax) cycle
+        k=k+1
 
         if(RSD) then
           v3=0.5*[v2(1)+v1(1),v2(2)+v1(2),v2(3)+v1(3)]
           v4=[v2(1)-v1(1),v2(2)-v1(2),v2(3)-v1(3)] ! connecting vector
           theta=v3(1)*v4(1) + v3(2)*v4(2) + v3(3)*v4(3)
           theta=(theta/((sqrt(v3(1)**2 + v3(2)**2 + v3(3)**2)) * (sqrt(v4(1)**2 +v4(2)**2 +v4(3)**2))))
-  
+
           output(i)%mu(k)=floor((theta+1.)*odtheta)+1
-          !if(output(i)%mu(k)<=0) print*,'weird1'! output(i)%mu(k)=1
-          !if(output(i)%mu(k)>nmu) print*,'weird2'! output(i)%mu(k)=nmu
         else
           output(i)%mu(k)=1
         endif
-!!!!!!NEW!!!!!!
-        if(vec_dist<=rmin) cycle
-        if(vec_dist>=rmax) cycle
+
         if(logbins) then
           output(i)%dist(k)=floor((log10(vec_dist)-lrmin)*odr)+1
         else
           output(i)%dist(k)=floor((vec_dist-rmin)*odr)+1
         endif
         output(i)%id(k)=resultsb(j)%idx
-!!!!!!NEW!!!!!!
     enddo
 
-
-!!!!!!NEW!!!!!!
-    call sort2(output(i)%id,output(i)%dist,output(i)%mu,nnode)
-!!!!!!NEW!!!!!!
-    nn2=0
+    output(i)%nn=k
+    if(k>0) call sort2(output(i)%id,output(i)%dist,output(i)%mu,k)
 
 enddo
 !$OMP END PARALLEL DO
