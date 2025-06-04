@@ -77,3 +77,11 @@ make all
 
 This will compile the code and place the `gramsci` and `domain_decomposition`
 executables in the `bin/` directory.
+
+TESTING
+-------
+Run the unit tests with:
+
+```
+make test
+```
