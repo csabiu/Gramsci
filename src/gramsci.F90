@@ -329,7 +329,10 @@ do i=istart,iend
           theta=v3(1)*v4(1) + v3(2)*v4(2) + v3(3)*v4(3)
           theta=(theta/((sqrt(v3(1)**2 + v3(2)**2 + v3(3)**2)) * (sqrt(v4(1)**2 +v4(2)**2 +v4(3)**2))))
 
-          output(i)%mu(k)=floor((theta+1.)*odtheta)+1
+          mu1=floor((theta+1.)*odtheta)+1
+          if (mu1 < 1) mu1 = 1
+          if (mu1 > nmu) mu1 = nmu
+          output(i)%mu(k)=mu1
         else
           output(i)%mu(k)=1
         endif
@@ -1631,6 +1634,8 @@ real :: mu11,mu22
   mu22=((mu2-0.5)/odtheta) -1.0 !+ 1./nmu
   
   mun=floor((1.1547*(0.75 - mu11*mu11 - mu22*mu22 + (mu11*mu22))**0.5)*nmu)+1
+  if (mun < 1) mun = 1
+  if (mun > nmu) mun = nmu
   !print*,mu11,mu22,((.75 - mu11*mu11 - mu22*mu22 + (mu11*mu22))),mun
   !print*,mu1,mu11,mu2,mu22,(0.75 - mu11*mu11 - mu22*mu22 + mu11*mu22),1.1547*(0.75 - mu11*mu11 - mu22*mu22 + mu11*mu22)**0.5,mun
 end subroutine find_normal
