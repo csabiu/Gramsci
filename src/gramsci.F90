@@ -1,18 +1,14 @@
 program Ngramsci
   use kdtree2_module
   use kdtree2_precision_module
+  use node_module
+  use iso_fortran_env, only: int8
   implicit none
 #ifdef MPI
     include 'mpif.h'
 #endif
     INCLUDE "omp_lib.h"
     
-  TYPE node
-    integer :: nn
-    integer,allocatable :: id(:)
-    integer*1,allocatable :: dist(:),mu(:)
-  END TYPE node
-
   type(node), dimension(:), allocatable :: output
   
   real(kdkind), dimension(:,:), allocatable :: my_array
@@ -25,7 +21,7 @@ program Ngramsci
   real :: avgal,avran
   real(kdkind) :: ndd,nrr
   integer :: k, i, j, l,m,n,d,chunk,nmu,nbins,iloop,nrel,cbins
-  integer*1 :: mu1,mu2,mu3,ind1,ind2,ind3,ind4
+  integer(int8) :: mu1,mu2,mu3,ind1,ind2,ind3,ind4
   character :: file1*2000,file2*2000, ranfile*2000, outfile*2000
   type(kdtree2_result),allocatable :: resultsb(:)
   integer   ::  Ndata,Nrand,nn1,nn2,nnode,nodeid, thread, threads
@@ -218,6 +214,9 @@ if(four_pcf_tetra) then
 endif
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+do i=1,size(output)
+  call output(i)%destroy()
+end do
 deallocate(output)
 
 call cpu_time(finish)
@@ -305,11 +304,7 @@ do i=istart,iend
   endif
   nnode=nn2-nn1
 
-  output(i)%nn=nnode
-
-  allocate(output(i)%id(nnode))
-  allocate(output(i)%dist(nnode))
-  allocate(output(i)%mu(nnode))
+  call output(i)%init(nnode)
 
   v2=my_array(:,i)
 
@@ -357,7 +352,7 @@ end subroutine create_graph
 
 subroutine query_graph_2pcf (istart,iend)
 integer i,nn2,idum,jdum, ninter,k1,k2,k3,id1,istart,iend
-integer*1 ind1,mu
+integer(int8) :: ind1,mu
 if(myid==0) then
   print*,'begin querying the graph'
   print*,'number of mu bins:',nmu 
@@ -407,7 +402,7 @@ end subroutine query_graph_2pcf
 
 subroutine query_graph_equilateral_triangle (istart,iend)
 integer i,nn2,idum,jdum, ninter,k1,k2,k3,id1,id2,istart,iend
-integer*1 ind1,ind2,ind3
+integer(int8) :: ind1,ind2,ind3
 if(myid==0) print*,'begin querying the graph'
 
 !$OMP PARALLEL DO schedule(dynamic)  private(i,k1,k2,k3,nn2,id1,id2,ind1,ind2,ind3) & ! , 
@@ -468,7 +463,7 @@ end subroutine query_graph_equilateral_triangle
 
 subroutine query_graph_3pcf_all (istart,iend)
 integer i,nn2,idum,jdum, ninter,k1,k2,k3,id1,id2,istart,iend,bin
-integer*1 ind1,ind2,ind3
+integer(int8) :: ind1,ind2,ind3
 
 if(myid==0) print*,'Performing 3pcf (all configurations)'
 if(myid==0) print*,'begin querying the graph'
@@ -553,7 +548,7 @@ end subroutine query_graph_3pcf_all
 
 subroutine query_graph_tetrahedron (istart,iend)
 integer nn3,idum,jdum, ninter,k1,k2,k3,id1,id2,id3,id4
-integer*1 ind1,ind2,ind3,ind4,ind5,ind6,dum
+integer(int8) :: ind1,ind2,ind3,ind4,ind5,ind6,dum
 integer istart,iend
 if(myid==0) print*,'begin querying the graph'
 
@@ -667,7 +662,7 @@ end subroutine query_graph_tetrahedron
 
 subroutine query_4pcf_all2 (istart,iend)
 integer nn3,idum,jdum, ninter,k1,k2,k3,id1,id2,id3,id4
-integer*1 ind1,ind2,ind3,ind4,ind5,ind6,dum
+integer(int8) :: ind1,ind2,ind3,ind4,ind5,ind6,dum
 integer istart,iend,bin
 if(myid==0) print*,'begin querying the graph'
 
@@ -868,7 +863,7 @@ end subroutine query_4pcf_all2
 
 subroutine query_4pcf_all (istart,iend)
 integer nn3,idum,jdum, ninter,k1,k2,k3,id1,id2,id3,id4
-integer*1 ind1,ind2,ind3,ind4,ind5,ind6,dum
+integer(int8) :: ind1,ind2,ind3,ind4,ind5,ind6,dum
 integer istart,iend,bin,bin2
 real tmp1,tmp2,tmp3,tmp4,tmp5,tmp6,tmp7
 if(myid==0) print*,'begin querying the graph'
@@ -1079,7 +1074,7 @@ endif
 end subroutine query_4pcf_all
 
 subroutine binner(i,j,k,l,m,n,bin)
-  integer*1 :: i,j,k,l,m,n
+  integer(int8) :: i,j,k,l,m,n
   integer*4 :: bin
   bin=i+(j-1)*nbins+(k-1)*nbins**2+(l-1)*nbins**3+(m-1)*nbins**4+(n-1)*nbins**5
 
@@ -1088,7 +1083,7 @@ end subroutine
 
 subroutine query_graph_bipyramid (istart,iend)
 integer nn3,idum,jdum, ninter,k1,k2,k3,id1,id2,id3,id4
-integer*1 ind1,ind2,ind3,ind4,ind5,ind6,dum
+integer(int8) :: ind1,ind2,ind3,ind4,ind5,ind6,dum
 integer istart,iend
 if(myid==0) print*,'begin querying the graph'
 
@@ -1574,7 +1569,7 @@ subroutine find_dist2(id1,id2,ind)
 implicit none
 integer i
 INTEGER, INTENT(IN)                :: id1, id2
-INTEGER*1, INTENT(OUT)                :: ind
+integer(int8), INTENT(OUT)                :: ind
 
 if(output(id1)%id(1)>id2 .or. output(id1)%id(output(id1)%nn)<id2) then
   ind=0
@@ -1596,7 +1591,7 @@ subroutine find_dist(id1,id2, ind) !Binary chopper. Find i such that X = A(i)
   implicit none
   integer i
   INTEGER, INTENT(IN)                :: id1, id2
-  INTEGER*1, INTENT(OUT)                :: ind
+  integer(int8), INTENT(OUT)                :: ind
   INTEGER L,R,P    !Fingers.
 
         
@@ -1625,9 +1620,9 @@ subroutine find_dist(id1,id2, ind) !Binary chopper. Find i such that X = A(i)
       END SUBROUTINE  !A's values need not be all different, merely in order. 
 
 subroutine find_normal(mu1,mu2,mun)
-implicit none 
-INTEGER*1, INTENT(in)                :: mu1,mu2
-INTEGER*1, INTENT(OUT)                :: mun
+implicit none
+integer(int8), INTENT(in)                :: mu1,mu2
+integer(int8), INTENT(OUT)                :: mun
 real :: mu11,mu22
 
   mu11=((mu1-0.5)/odtheta) -1.0 !+ 1./nmu
@@ -1705,8 +1700,8 @@ end subroutine default_params
 
    SUBROUTINE  Swap2(a, b)
       IMPLICIT  NONE
-      INTEGER*1, INTENT(INOUT) :: a, b
-      INTEGER*1                :: Temp
+      integer(int8), INTENT(INOUT) :: a, b
+      integer(int8)                :: Temp
 
       Temp = a
       a    = b
@@ -1723,7 +1718,7 @@ end subroutine default_params
    SUBROUTINE  Sort2(x,y,z, Size)
       IMPLICIT  NONE
       INTEGER, DIMENSION(1:), INTENT(INOUT) :: x
-      INTEGER*1, DIMENSION(1:), INTENT(INOUT) :: y,z
+      integer(int8), DIMENSION(1:), INTENT(INOUT) :: y,z
       INTEGER, INTENT(IN)                   :: Size
       INTEGER                               :: i
       INTEGER                               :: Location
@@ -1739,7 +1734,7 @@ end subroutine default_params
     SUBROUTINE  Sort3(x,y, Size)
       IMPLICIT  NONE
       INTEGER, DIMENSION(1:), INTENT(INOUT) :: x
-      INTEGER*1, DIMENSION(1:), INTENT(INOUT) :: y
+      integer(int8), DIMENSION(1:), INTENT(INOUT) :: y
       INTEGER, INTENT(IN)                   :: Size
       INTEGER                               :: i
       INTEGER                               :: Location

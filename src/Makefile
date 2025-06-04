@@ -40,11 +40,11 @@ MY_DIR=`basename ${PWD}`
 
 all:	gramsci domain_decomposition
 
-gramsci: gramsci.o kdtree2.o extension.o
-	${F90} ${FLAGS} -o gramsci gramsci.o kdtree2.o extension.o ; \
+gramsci: gramsci.o kdtree2.o extension.o node_module.o
+	${F90} ${FLAGS} -o gramsci gramsci.o kdtree2.o extension.o node_module.o ; \
 	mv $@ $(BINDIR)/gramsci
 
-gramsci.o: kdtree2.o extension.o
+gramsci.o: kdtree2.o extension.o node_module.o
 
 domain_decomposition: domain_decomposition.o
 	${F90} ${FLAGS} -o domain_decomposition domain_decomposition.o ; \
