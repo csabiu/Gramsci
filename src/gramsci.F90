@@ -1280,7 +1280,7 @@ end subroutine query_graph_bipyramid
             i=i+1
 
          case default
-            print '("unknown option ",a6," ignored")', opt
+            print '("unknown option ",a," ignored")', trim(opt)
             stop
          end select
 
@@ -1603,9 +1603,8 @@ subroutine find_dist(id1,id2, ind) !Binary chopper. Find i such that X = A(i)
   INTEGER L,R,P    !Fingers.
 
         
-  if(id1<=0)then
-          print*, 'weird!!! wtf'
-          print*,id1
+  if(id1<=0) then
+          print*, 'ERROR: invalid node index', id1
         endif
 
         if(output(id1)%id(1)>id2 .or. output(id1)%id(output(id1)%nn)<id2) then
