@@ -15,6 +15,7 @@ $(BUILD)/test_pq: test_pq.f90 $(SRC)
 
 test: $(BUILD)/test_pq
 	./$(BUILD)/test_pq
+	python3 run_correlation_tests.py
 
 clean:
 	rm -rf $(BUILD)
