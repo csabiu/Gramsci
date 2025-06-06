@@ -1218,7 +1218,8 @@ end subroutine query_graph_bipyramid
             read (arg,*) nmu
             if(nmu>=2) then
               RSD=.true.
-              if(myid==master) print*,'Anisotropic analysis requested'
+              if(rank==master) print*,'Anisotropic analysis requested'
+            endif
             i=i+2
          case ('-wgt')
               wgt=.true.
