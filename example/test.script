@@ -1,6 +1,6 @@
-../bin/gramsci -gal test.gal -ran test.ran -rmin 1.0 -rmax 30. -nbins 10 -wgt -out test.2pcf -2pcf
-../bin/gramsci -gal test.gal -ran test.ran -rmin 1.0 -rmax 30. -nbins 10 -nmu 10 -wgt -out test2.2pcf -2pcf
-../bin/gramsci -gal test.gal -ran test.ran -rmin 1.0 -rmax 30. -nbins 10 -wgt -out test.3pcf -3pcf
+../bin/gramsci -gal test.gal -ran test.ran -rmin 1.0 -rmax 30. -nbins 10 -out test.2pcf -2pcf
+../bin/gramsci -gal test.gal -ran test.ran -rmin 1.0 -rmax 30. -nbins 10 -nmu 10 -out test2.2pcf -2pcf
+../bin/gramsci -gal test.gal -ran test.ran -rmin 1.0 -rmax 30. -nbins 10 -out test.3pcf -3pcf
 
 #../bin/gramsci -gal test.gal -ran test.ran -rmin 1.0 -rmax 30. -nbins 10 -wgt -out test.4pcf -4pcf
 
