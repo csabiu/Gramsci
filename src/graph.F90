@@ -7,12 +7,8 @@ program gramsci
 #endif
     INCLUDE "omp_lib.h"
     
-  TYPE node
-    integer :: nn
-    integer,allocatable :: id(:)
-    integer*1,allocatable :: dist(:),mu(:)
-  END TYPE node
-
+  use node_module, only: node
+  use sorting_module
   type(node), dimension(:), allocatable :: output
   
   real(kdkind), dimension(:,:), allocatable :: my_array
@@ -1095,70 +1091,7 @@ subroutine default_params()
   loadran=.false.
   saveran=.false.
 
-end subroutine default_params
-
-
-   INTEGER FUNCTION  FindMinimum(x, Start, End)
-      IMPLICIT  NONE
-      INTEGER, DIMENSION(1:), INTENT(IN) :: x
-      INTEGER, INTENT(IN)                :: Start, End
-      INTEGER                            :: Minimum
-      INTEGER                            :: Location
-      INTEGER                            :: i
-
-      Minimum  = x(Start)
-      Location = Start
-      DO i = Start+1, End
-         IF (x(i) < Minimum) THEN
-            Minimum  = x(i)
-            Location = i
-         END IF
-      END DO
-      FindMinimum = Location
-   END FUNCTION  FindMinimum
-
-
-! --------------------------------------------------------------------
-! SUBROUTINE  Swap():
-!    This subroutine swaps the values of its two formal arguments.
-! --------------------------------------------------------------------
-
-   SUBROUTINE  Swap(a, b)
-      IMPLICIT  NONE
-      INTEGER, INTENT(INOUT) :: a, b
-      INTEGER                :: Temp
-
-      Temp = a
-      a    = b
-      b    = Temp
-   END SUBROUTINE  Swap
-
-   SUBROUTINE  Swap2(a, b)
-      IMPLICIT  NONE
-      INTEGER*1, INTENT(INOUT) :: a, b
-      INTEGER*1                :: Temp
-
-      Temp = a
-      a    = b
-      b    = Temp
-   END SUBROUTINE  Swap2
-
-
-   SUBROUTINE  Sort2(x,y,z, Size)
-      IMPLICIT  NONE
-      INTEGER, DIMENSION(1:), INTENT(INOUT) :: x
-      INTEGER*1, DIMENSION(1:), INTENT(INOUT) :: y,z
-      INTEGER, INTENT(IN)                   :: Size
-      INTEGER                               :: i
-      INTEGER                               :: Location
-
-      DO i = 1, Size-1
-         Location = FindMinimum(x, i, Size)
-         CALL  Swap(x(i), x(Location))
-         CALL  Swap2(y(i), y(Location))
-         CALL  Swap2(z(i), z(Location))
-      END DO
-   END SUBROUTINE  Sort2
+  end subroutine default_params
 
 character(len=20) function str(k)
 !   "Convert an integer to string."

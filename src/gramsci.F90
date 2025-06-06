@@ -2,6 +2,7 @@ program Ngramsci
   use kdtree2_module
   use kdtree2_precision_module
   use node_module
+  use sorting_module
   use iso_fortran_env, only: int8
   implicit none
 #ifdef MPI
@@ -1662,89 +1663,6 @@ subroutine default_params()
   two_pcf=.false.
 
 end subroutine default_params
-
-
-   INTEGER FUNCTION  FindMinimum(x, Start, End)
-      IMPLICIT  NONE
-      INTEGER, DIMENSION(1:), INTENT(IN) :: x
-      INTEGER, INTENT(IN)                :: Start, End
-      INTEGER                            :: Minimum
-      INTEGER                            :: Location
-      INTEGER                            :: i
-
-      Minimum  = x(Start)
-      Location = Start
-      DO i = Start+1, End
-         IF (x(i) < Minimum) THEN
-            Minimum  = x(i)
-            Location = i
-         END IF
-      END DO
-      FindMinimum = Location
-   END FUNCTION  FindMinimum
-
-! --------------------------------------------------------------------
-! SUBROUTINE  Swap():
-!    This subroutine swaps the values of its two formal arguments.
-! --------------------------------------------------------------------
-
-   SUBROUTINE  Swap(a, b)
-      IMPLICIT  NONE
-      INTEGER, INTENT(INOUT) :: a, b
-      INTEGER                :: Temp
-
-      Temp = a
-      a    = b
-      b    = Temp
-   END SUBROUTINE  Swap
-
-   SUBROUTINE  Swap2(a, b)
-      IMPLICIT  NONE
-      integer(int8), INTENT(INOUT) :: a, b
-      integer(int8)                :: Temp
-
-      Temp = a
-      a    = b
-      b    = Temp
-   END SUBROUTINE  Swap2
-
-! --------------------------------------------------------------------
-! SUBROUTINE  Sort():
-!    This subroutine receives an array x() and sorts it into ascending
-! order.
-! --------------------------------------------------------------------
-
-
-   SUBROUTINE  Sort2(x,y,z, Size)
-      IMPLICIT  NONE
-      INTEGER, DIMENSION(1:), INTENT(INOUT) :: x
-      integer(int8), DIMENSION(1:), INTENT(INOUT) :: y,z
-      INTEGER, INTENT(IN)                   :: Size
-      INTEGER                               :: i
-      INTEGER                               :: Location
-
-      DO i = 1, Size-1
-         Location = FindMinimum(x, i, Size)
-         CALL  Swap(x(i), x(Location))
-         CALL  Swap2(y(i), y(Location))
-         CALL  Swap2(z(i), z(Location))
-      END DO
-   END SUBROUTINE  Sort2
-
-    SUBROUTINE  Sort3(x,y, Size)
-      IMPLICIT  NONE
-      INTEGER, DIMENSION(1:), INTENT(INOUT) :: x
-      integer(int8), DIMENSION(1:), INTENT(INOUT) :: y
-      INTEGER, INTENT(IN)                   :: Size
-      INTEGER                               :: i
-      INTEGER                               :: Location
-
-      DO i = 1, Size-1
-         Location = FindMinimum(x, i, Size)
-         CALL  Swap(x(i), x(Location))
-         CALL  Swap2(y(i), y(Location))
-      END DO
-   END SUBROUTINE  Sort3
 
 character(len=20) function str(k)
 !   "Convert an integer to string."
