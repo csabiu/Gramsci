@@ -19,7 +19,7 @@ PURPOSE: Code for calculating the N-point Spatial Correlation Functions of a 3D 
  CALLING SEQUENCE:
        gramsci [-gal galaxy file][-ran ranfile (optional)]
                [-rmin Rmin] [-rmax Rmax] [-nbins Nbins] 
-               [-RSD RSD] [-nmu Nmu] [-out out_file] 
+               [-nmu Nmu] [-out out_file] 
   
        eg: ./gramsci -rmin 10.0 -rmax 12.0 -nbins 10 [choose one: -2pcf -3pcf -4pcf]
   
@@ -36,8 +36,6 @@ PURPOSE: Code for calculating the N-point Spatial Correlation Functions of a 3D 
   
         Nmu = Number of angular (mu) bins - linear in range -1<mu<+1
   
-        RSD = logical value to request anisotropic analysis.
-               In this case the number of angular bins Nmu should be set
 
 
  --------------------------------
