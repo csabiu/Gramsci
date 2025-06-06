@@ -17,7 +17,7 @@ def main():
     ran = os.path.join('..', 'example', 'test.ran')
 
     out2 = 'tmp_2pcf.out'
-    cmd2 = f"{os.path.join(bindir, 'gramsci')} -gal {gal} -ran {ran} -rmin 1.0 -rmax 30.0 -nbins 10 -wgt -nmu 10 -RSD -out {out2} -2pcf"
+    cmd2 = f"{os.path.join(bindir, 'gramsci')} -gal {gal} -ran {ran} -rmin 1.0 -rmax 30.0 -nbins 10 -wgt -nmu 10 -rsd -out {out2} -2pcf"
     run(cmd2)
 
     tmp=np.loadtxt(out2,skiprows=1)
