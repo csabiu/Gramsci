@@ -1216,12 +1216,10 @@ end subroutine query_graph_bipyramid
          case ('-nmu')
             call getArgument(i+1,arg)
             read (arg,*) nmu
-            if(nmu>=2) RSD=.true.
+            if(nmu>=2) then
+              RSD=.true.
+              if(myid==master) print*,'Anisotropic analysis requested'
             i=i+2
-         case ('-rsd')
-            RSD=.true.
-            if(rank==master) print*,'Anisotropic analysis requested'
-            i=i+1
          case ('-wgt')
               wgt=.true.
               i=i+1
