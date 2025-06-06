@@ -17,7 +17,7 @@ def main():
     ran = os.path.join('..', 'example', 'test.ran')
 
     out2 = 'tmp_2pcf.out'
-    cmd2 = f"{os.path.join(bindir, 'gramsci')} -gal {gal} -ran {ran} -rmin 1.0 -rmax 30.0 -nbins 10 -wgt -nmu 10 -out {out2} -2pcf"
+    cmd2 = f"{os.path.join(bindir, 'gramsci')} -gal {gal} -ran {ran} -rmin 1.0 -rmax 30.0 -nbins 10 -nmu 10 -out {out2} -2pcf"
     run(cmd2)
 
     tmp=np.loadtxt(out2,skiprows=1)
@@ -27,7 +27,6 @@ def main():
 
     assert_close(DD, 2.124343822e-07, 1e-5, '2pcf DD')
     assert_close(RR, 3.362627962e-07, 1e-5, '2pcf RR')
-
 
     out3 = 'tmp_3pcf.out'
     cmd3 = f"{os.path.join(bindir, 'gramsci')} -gal {gal} -ran {ran} -rmin 1.0 -rmax 30.0 -nbins 6 -wgt -nmu 1 -out {out3} -3pcf"
@@ -42,6 +41,7 @@ def main():
 
     os.remove(out2)
     os.remove(out3)
+    
     print('Correlation tests passed')
 
 if __name__ == '__main__':
