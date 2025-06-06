@@ -29,7 +29,7 @@ def main():
     assert_close(RR, 3.362627962e-07, 1e-5, '2pcf RR')
 
     out3 = 'tmp_3pcf.out'
-    cmd3 = f"{os.path.join(bindir, 'gramsci')} -gal {gal} -ran {ran} -rmin 1.0 -rmax 30.0 -nbins 6 -wgt -nmu 1 -out {out3} -3pcf"
+    cmd3 = f"{os.path.join(bindir, 'gramsci')} -gal {gal} -ran {ran} -rmin 1.0 -rmax 30.0 -nbins 6 -nmu 1 -out {out3} -3pcf"
     run(cmd3)
     tmp=np.loadtxt(out3,skiprows=1)
 
