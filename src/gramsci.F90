@@ -28,7 +28,7 @@ program Ngramsci
   integer   ::  num_data,num_rand,nn1,nn2,nnode,nodeid, thread, threads
   real(kdkind)  :: aux,inv_delta_r,mu_scale,theta,start,finish
   real(kdkind) :: rmin, rmax, delta_r, vec_dist,log_rmin, rand_val
-  logical :: wgt, logbins, RSD, loadran,saveran,cut,DOMPI,four_pcf_tetra,four_pcf,three_pcf
+  logical :: logbins, RSD, loadran,saveran,cut,DOMPI,four_pcf_tetra,four_pcf,three_pcf
   logical :: rancat,four_pcf_box, three_pcf_eq, two_pcf
   integer :: rank , num_tasks , ierr
   real(kdkind), parameter :: pival=3.14159265358979323846d0
@@ -1221,9 +1221,6 @@ end subroutine query_graph_bipyramid
               if(rank==master) print*,'Anisotropic analysis requested'
             endif
             i=i+2
-         case ('-wgt')
-              wgt=.true.
-              i=i+1
           case ('-cut')
             call getArgument(i+1,arg)
             cut=.true.
@@ -1282,7 +1279,7 @@ print*,'     '
 print*,'CALLING SEQUENCE:'
 print*,'      Ngramsci[-gal galaxy file][-ran ranfile (optional)]'
 print*,'           [-rmin Rmin] [-rmax Rmax] [-nbins Nbins] '
-print*,'           [-RSD RSD] [-nmu Nmu] [-out out_file]'
+print*,'           [-nmu Nmu] [-out out_file]'
 print*,' '
 print*,'      eg: Ngramsci -rmin 10.0 -rmax 12.0 -nbins 10 [choose one: -2pcf -3pcf -4pcf'
 print*,' '
@@ -1299,8 +1296,6 @@ print*,'       Nbins = Number of radial bins to calculate'
 print*,' '
 print*,'       Nmu = Number of angular (mu) bins - linear in range -1<mu<+1'
 print*,' '
-print*,'       RSD = logical value to request anisotropic analysis.'
-print*,'              In this case the number of angular bins Nmu should be set'
 print*,' '
 print*,''
 end subroutine print_help
@@ -1633,7 +1628,6 @@ subroutine default_params()
 
   d=3
   cut=.false.
-  wgt=.true.
   logbins=.false.
   nbins=0
   rmin=0.0
