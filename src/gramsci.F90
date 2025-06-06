@@ -74,7 +74,6 @@ print*,'number of mu bins:',nmu
 
   Allocate(my_array(d,Ndata+Nrand))
   Allocate(wgt1(Ndata+Nrand))
-  !allocate(gal(Ndata+Nrand))
   allocate(buffer(Ndata+Nrand))
   allocate(v1(d))
   allocate(v2(d))
@@ -275,7 +274,6 @@ call MPI_Barrier(MPI_COMM_WORLD,ierr)
 call MPI_FINALIZE( ierr )
 #endif
 
-!deallocate(gal)
 deallocate(buffer)
 
 if(myid==master) then
@@ -1221,10 +1219,6 @@ end subroutine query_graph_bipyramid
             if(nmu>=2) RSD=.true.
             i=i+2
          case ('-rsd')
-            RSD=.true.
-            if(myid==master) print*,'Anisotropic analysis requested'
-            i=i+1
-         case ('-RSD')
             RSD=.true.
             if(myid==master) print*,'Anisotropic analysis requested'
             i=i+1
