@@ -463,11 +463,12 @@ end subroutine query_graph_equilateral_triangle
 subroutine query_graph_3pcf_all (istart,iend)
 integer i,nn2,idum,jdum, ninter,k1,k2,k3,id1,id2,istart,iend,bin
 integer(int8) :: ind1,ind2,ind3
+real(kdkind) :: wi_w1
 
 if(rank==0) print*,'Performing 3pcf (all configurations)'
 if(rank==0) print*,'begin querying the graph'
 
-!$OMP PARALLEL DO schedule(dynamic)  private(i,k1,k2,k3,nn2,id1,id2,ind1,ind2,ind3,bin) & ! , 
+!$OMP PARALLEL DO schedule(dynamic)  private(i,k1,k2,k3,nn2,id1,id2,ind1,ind2,ind3,bin,wi_w1) & ! ,
 !$OMP& shared(weights,output,num_data,num_rand,rank,buffer)&
 !$OMP& reduction(+:N2)&
 !$OMP& reduction(+:N3)
@@ -477,35 +478,34 @@ do i=istart,iend             ! begin loop over all data (and random) point
     nn2=output(i)%nn       ! open node nn2 = # of neighbors
 
     do k1=1,nn2
-      ind1=output(i)%dist(k1)   !edge
+      ind1=output(i)%dist(k1)   !edge distance r1
       id1=output(i)%id(k1)
+      wi_w1 = weights(i)*weights(id1)
 
-        do k2=k1,nn2
-          if(k2==k1)cycle
-          ind2=output(i)%dist(k2) !edge
+        do k2=k1+1,nn2
+          ind2=output(i)%dist(k2) !edge distance r2
           if(ind2==0) cycle
 
           id2=output(i)%id(k2)
-          call find_dist(id1,id2,ind3) !edge
+          call find_dist(id1,id2,ind3) !third side distance r3
           if(ind3==0)cycle
 
           bin=bintable(ind1,ind2,ind3,1)
 
-          if(RSD) then 
+          if(RSD) then
             call find_normal(output(i)%mu(k1),output(i)%mu(k2),ind2)
-            !N2(bin,ind2,3)=N2(ind1,ind2,3)+weights(i)*weights(id1)*weights(id2)
             if(i>num_data .and. id1>num_data .and. id2>num_data) then
-              N3(bin,ind2,3)=N3(bin,ind2,3)-weights(i)*weights(id1)*weights(id2)
+              N3(bin,ind2,3)=N3(bin,ind2,3)-wi_w1*weights(id2)
             endif
-              N2(bin,ind2,3)=N2(bin,ind2,3)+weights(i)*weights(id1)*weights(id2)
+            N2(bin,ind2,3)=N2(bin,ind2,3)+wi_w1*weights(id2)
           else
             if(i>num_data .and. id1>num_data .and. id2>num_data) then
-              N3(bin,1,3)=N3(bin,1,3)-weights(i)*weights(id1)*weights(id2)
+              N3(bin,1,3)=N3(bin,1,3)-wi_w1*weights(id2)
             endif
-            N2(bin,1,3)=N2(bin,1,3)+weights(i)*weights(id1)*weights(id2)
+            N2(bin,1,3)=N2(bin,1,3)+wi_w1*weights(id2)
           endif
 
-        enddo 
+        enddo
     enddo
 enddo
 !$OMP END PARALLEL DO
