@@ -1,17 +1,19 @@
 ----------------------------------------------------------------------
       GRAMSCI: GRAph Made Statistics for Cosmological Information
-      " Telling the truth is always revolutionary  "
 ----------------------------------------------------------------------
 ----- Cristiano Sabiu, csabiu@gmail.com ------
-----------------------------------------------
------ Ben Hoyle, Juhan Kim, XiaoDong Li  -----
+----------------------------------------------------------------------
+----- Graph Database Solution for Higher Order Spatial Statistics in the Era of Big Data
+----- Cristiano Sabiu, Ben Hoyle, Juhan Kim, XiaoDong Li 
+----- arXiv: https://arxiv.org/abs/1901.00296
+----- cite:  The Astrophysical Journal Supplement Series, Volume 242, Issue 2, article id. 29, 8 pp. (2019).
 ----------------------------------------------------------------------
 
  -----------------
  **   gramsci   **
  -----------------
 
-PURPOSE: Code for calculating the N-PCFs of a 3D point set. 
+PURPOSE: Code for calculating the N-point Spatial Correlation Functions of a 3D point set.
       
       
  CALLING SEQUENCE:
