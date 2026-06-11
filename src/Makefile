@@ -5,29 +5,20 @@ BINDIR="../bin/"
 FLAGSALWAYS = -DDOUBLE -ffree-line-length-none
 
 #FLAGSOPT=
-#-O3 -ffast-math 
+#-O3 -ffast-math
 #FLAGSDEBUG= -g -fbounds-check -O0
 
-#F90=/usr/local/bin/mpif90 -DMPI -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -mtune=intel -faggressive-loop-optimizations -ftree-loop-if-convert 
-#F90=gfortran -DGFORTRAN -fopenmp -Ofast -ffast-math -faggressive-loop-optimizations -ftree-loop-if-convert 
-F90=gfortran -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -faggressive-loop-optimizations -ftree-loop-if-convert 
+#F90=/usr/local/bin/mpif90 -DMPI -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -mtune=intel -faggressive-loop-optimizations -ftree-loop-if-convert
+#F90=gfortran -DGFORTRAN -fopenmp -Ofast -ffast-math -faggressive-loop-optimizations -ftree-loop-if-convert
+F90=gfortran -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -faggressive-loop-optimizations -ftree-loop-if-convert
 
-#F90=mpiifort -O3 -fopenmp -132 -parallel -xSSE4.2 -m64 -fast
-#F90=ifort -O0 -g -traceback -debug all -gen-interfaces -warn interfaces -fopenmp -132 
-#-O3 -fopenmp -132 -xSSE4.2 -m64 -fast
-#
-
-#F90MPI=mpif90 -O3 -DMPI -fopenmp -132 
-#F90=mpif90 -O3 -DMPI -fopenmp -132 
-
-
-#LIBS=-L/usr/local/openmpi-1.6.3-mx-intel12/lib/
-#INC=-I/usr/local/include/ 
-#-I/applic/compilers/gcc/4.9.3/mpi/mvapich2/2.1/include/
+# macOS SDK path for linker (fixes -lSystem not found)
+SDKPATH=$(shell xcrun --show-sdk-path 2>/dev/null)
+LDFLAGS=$(if $(SDKPATH),-L$(SDKPATH)/usr/lib,)
 
 # choose debugging or optimization
-FLAGS= ${FLAGSMACHINE} ${FLAGSALWAYS} ${INC} ${LIBS} ${FLAGSOPT}  #  change the last to ${FLAGSOPT} or ${FLAGSDEBUG}
-MPIFLAGS= ${FLAGSMACHINE} ${FLAGSALWAYS} ${INC} ${LIBS} ${FLAGSOPT}  #  change the last to ${FLAGSOPT} or ${FLAGSDEBUG}
+FLAGS= ${FLAGSMACHINE} ${FLAGSALWAYS} ${INC} ${LIBS} ${FLAGSOPT}
+MPIFLAGS= ${FLAGSMACHINE} ${FLAGSALWAYS} ${INC} ${LIBS} ${FLAGSOPT}
 
 MY_DIR=`basename ${PWD}`
 #------------------------------------
@@ -40,14 +31,28 @@ MY_DIR=`basename ${PWD}`
 
 all:	gramsci domain_decomposition
 
-gramsci: gramsci.o kdtree2.o extension.o node_module.o sorting_module.o
-	${F90} ${FLAGS} -o gramsci gramsci.o kdtree2.o extension.o node_module.o sorting_module.o ; \
+# Module dependency chain
+MODULES = extension.o kdtree2.o node_module.o sorting_module.o \
+          config_module.o io_module.o graph_utils_module.o \
+          graph_module.o query_2pcf_module.o query_3pcf_module.o \
+          query_4pcf_module.o
+
+gramsci: $(MODULES) gramsci.o
+	${F90} ${FLAGS} ${LDFLAGS} -o gramsci $(MODULES) gramsci.o ; \
 	mv $@ $(BINDIR)/gramsci
 
-gramsci.o: kdtree2.o extension.o node_module.o sorting_module.o
+# Explicit dependency rules for module compilation order
+config_module.o: kdtree2.o node_module.o extension.o
+io_module.o: kdtree2.o config_module.o
+graph_utils_module.o: kdtree2.o config_module.o
+graph_module.o: kdtree2.o node_module.o sorting_module.o config_module.o graph_utils_module.o
+query_2pcf_module.o: kdtree2.o config_module.o
+query_3pcf_module.o: kdtree2.o config_module.o graph_utils_module.o
+query_4pcf_module.o: kdtree2.o config_module.o graph_utils_module.o
+gramsci.o: $(MODULES)
 
 domain_decomposition: domain_decomposition.o
-	${F90} ${FLAGS} -o domain_decomposition domain_decomposition.o ; \
+	${F90} ${FLAGS} ${LDFLAGS} -o domain_decomposition domain_decomposition.o ; \
 	mv $@ $(BINDIR)/domain_decomposition
 
 clean:
