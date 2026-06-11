@@ -1,0 +1,619 @@
+%% GRAMSCI v2 paper: merge-walk + parity 4PCF + Python interface + GPU
+%% Reconstructed from the June 2026 gramsci_mergewalk draft (source was on
+%% laptop; PDF transcribed) and extended with the GPU implementation,
+%% DESI demonstration, and Quijote validation/cosmology sections.
+%%
+%% Build: pdflatex gramsci_v2; bibtex gramsci_v2; pdflatex x2
+\documentclass[twocolumn]{aastex701}
+
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray},
+  breaklines=true,
+  frame=single,
+  language=Python
+}
+
+\newcommand{\rmax}{r_{\mathrm{max}}}
+\newcommand{\Mpch}{\,h^{-1}\mathrm{Mpc}}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+
+\shorttitle{GRAMSCI: Graph-based N-point statistics}
+\shortauthors{Sabiu et al.}
+
+\begin{document}
+
+\title{Graph Database Solution for Higher Order Spatial Statistics in the
+  Era of Big Data: GPU Acceleration and Out-of-Core N-point Functions}
+
+\author{Cristiano G. Sabiu}
+\affiliation{Department of Physics, University of Seoul, Seoul 02504,
+  Republic of Korea}
+\email{csabiu@gmail.com}
+
+\begin{abstract}
+We present GRAMSCI (GRAph Made Statistics for Cosmological Information), an
+algorithm and open-source Fortran code for the fast computation of the
+general $N$-point spatial correlation function of any discrete point set
+embedded in $\mathbb{R}^n$.  Using KD-trees and a graph database, we count
+all possible $N$-tuples in binned configurations within a given length
+scale.
+
+\textit{Version 2 update.}  We describe several additions to the original
+code.  First, we replace the binary-search inner loop --- which cost
+$O(m\log m)$ per hub--spoke pair, where $m$ is the mean neighbour count ---
+with a \textit{merge-walk}: a two-pointer sorted-set intersection that
+exploits the pre-sorted adjacency lists and reduces the inner loop to
+$O(m)$.  Second, we implement a parity-decomposed 4PCF that separates the
+signal into even and odd channels, enabling direct tests of parity
+violation in the galaxy distribution.  Third, we provide a Python interface
+so the Fortran engine can be called directly from NumPy arrays.  Finally,
+and principally, we present a GPU port of the full query engine (OpenACC):
+the 3PCF, equilateral 3PCF, 4PCF, and parity-decomposed 4PCF kernels run on
+a single consumer GPU with measured speedups of $2.6\times$ (3PCF) to
+$9\times$ (4PCF) over a 64-thread CPU node, and an out-of-core tiling
+scheme allows graphs far exceeding device memory --- we measure a
+$9\times10^9$-edge BAO-scale 3PCF on a 24\,GB card with ${\sim}20\%$
+overhead.  We validate the code against its CPU reference and on Quijote
+$N$-body mocks, demonstrate BAO-scale 2- and 3-point measurements on the
+DESI DR1 LRG sample, and illustrate the cosmological information content of
+configuration-space $N$-point functions across the Quijote parameter
+variations.  The code is available at
+\url{https://github.com/csabiu/Gramsci}.
+\end{abstract}
+
+\keywords{cosmology: large-scale structure --- methods: statistical ---
+  methods: numerical --- galaxies: statistics}
+
+%% ===================================================================
+\section{Introduction}
+\label{sec:intro}
+
+The spatial distribution of galaxies encodes information about the
+primordial density field and its subsequent gravitational evolution.  The
+two-point correlation function (2PCF) has been the workhorse of this
+programme \citep[e.g.][]{anderson14}, but higher-order statistics carry
+complementary information that is inaccessible to the power spectrum.  The
+3-point correlation function (3PCF) probes the bispectrum, which constrains
+primordial non-Gaussianity and galaxy bias
+\citep{sefusatti06,gaztanaga05}.  The connected 4-point correlation
+function (4PCF) is related to the primordial trispectrum and provides
+additional leverage on inflationary models \citep{sefusatti07}.
+
+Computing $N$-point functions from large catalogues is expensive.  A
+brute-force approach requires $O(N^k)$ operations for a $k$-point function.
+Tree-based methods reduce this to $O(Nm^{k-1})$, where $m$ is the mean
+number of neighbours within the maximum scale $\rmax$, but the $m^{k-1}$
+factor still grows rapidly.
+
+Several codes are publicly available.  \textsc{TreeCorr} \citep{jarvis04}
+provides optimised 2PCF and 3PCF estimators for projected and
+three-dimensional catalogues.  \textsc{Corrfunc} \citep{sinha20} uses SIMD
+vectorisation (AVX2/AVX-512) for maximum 2PCF throughput.  \textsc{Encore}
+\citep{philcox22} expands the $N$-PCF in a spherical-harmonic basis,
+replacing direct enumeration with matrix products; this achieves favourable
+scaling at high neighbour density but does not directly yield a
+configuration-space connected 4PCF with parity decomposition.
+
+GRAMSCI \citep{sabiu19} uses a graph-database approach: it builds a compact
+sorted adjacency structure once from a KD-tree, then queries it for any
+combination of 2-, 3-, and 4-point statistics without revisiting the
+original coordinates.  This paper extends the original work in four
+directions (Section~\ref{sec:new}): an $O(m)$ merge-walk inner kernel
+(Section~\ref{sec:mergewalk}), a parity-decomposed 4PCF
+(Section~\ref{sec:parity}), a Python interface (Section~\ref{sec:python}),
+and a GPU port of the complete query engine with out-of-core support for
+graphs exceeding device memory (Section~\ref{sec:gpu}).
+
+%% ===================================================================
+\section{The GRAMSCI Algorithm}
+\label{sec:algorithm}
+
+We summarise the algorithm here; full details are in \citet{sabiu19}.
+
+\subsection{Graph construction}
+\label{sec:graph}
+
+Given a catalogue of $N$ objects, GRAMSCI builds a KD-tree and finds, for
+each object $i$, all neighbours within $\rmax$.  These are stored as a
+sorted adjacency list:
+\begin{equation}
+  \mathcal{N}(i) = \{j_1, j_2, \ldots, j_{m_i}\}, \quad
+  j_1 < j_2 < \cdots < j_{m_i}.
+  \label{eq:adjacency}
+\end{equation}
+Alongside each neighbour index, the radial-bin index (an integer byte) and
+optionally a direction-pixel byte (for the parity 4PCF) are stored.  The
+KD-tree and raw coordinates are then discarded; all subsequent NPCF queries
+operate entirely on the adjacency lists.
+
+The total memory footprint is $O(Nm)$ rather than $O(N^2)$.  The sorted
+order in Equation~(\ref{eq:adjacency}) is a key invariant exploited by the
+merge-walk kernel and the GPU binary-search kernels alike.
+
+\subsection{Triangle and tetrahedron enumeration}
+\label{sec:enumeration}
+
+For the 3PCF, GRAMSCI uses a hub-and-spoke loop: for each hub $i$ and each
+neighbour $j \in \mathcal{N}(i)$, it checks whether a second neighbour
+$k \in \mathcal{N}(i)$ with $k > j$ is also in $\mathcal{N}(j)$.  If so,
+the triangle $(i,j,k)$ is counted in the appropriate
+$(r_{ij}, r_{ik}, r_{jk})$ bin.  The 4PCF extends this to tetrahedra
+$(i, j_1, j_2, j_3)$ where every pair is connected.  The original
+membership test was a binary search on $\mathcal{N}(j)$, costing $O(\log
+m)$ per candidate.
+
+%% ===================================================================
+\section{New Contributions}
+\label{sec:new}
+
+\subsection{Merge-walk: $O(m)$ sorted-set intersection}
+\label{sec:mergewalk}
+
+Since the hub tail $\{k \in \mathcal{N}(i) : k > j\}$ and $\mathcal{N}(j)$
+are both sorted by node index (Equation~\ref{eq:adjacency}), their
+intersection can be found in a single linear pass with two pointers $a$
+and $b$:
+\begin{itemize}
+\item $a$ walks the hub tail, starting at the entry after $j$.
+\item $b$ walks $\mathcal{N}(j)$ from its beginning.
+\end{itemize}
+At each step:
+\begin{itemize}
+\item $\mathcal{N}(i)[a] = \mathcal{N}(j)[b]$: triangle found; accumulate
+  the $(r_{ij}, r_{ik}, r_{jk})$ bin contribution; advance both.
+\item $\mathcal{N}(i)[a] < \mathcal{N}(j)[b]$: advance $a$.
+\item otherwise: advance $b$.
+\end{itemize}
+Each list is visited at most once, giving $O(m_i + m_j)$ cost per spoke ---
+an $O(\log m)$ improvement over binary search.
+
+\subsubsection{Three-way merge for the 4PCF}
+\label{sec:threeway}
+
+For the 4PCF, once the k2 walk has located a second spoke $j_2$, the k3
+loop must find a third spoke $j_3$ that appears simultaneously in the hub
+tail beyond $j_2$, in $\mathcal{N}(j_1)$, and in $\mathcal{N}(j_2)$.  We
+generalise the two-pointer walk to three pointers $\alpha, \beta, \gamma$:
+\begin{itemize}
+\item $\alpha$: hub tail beyond $j_2$.
+\item $\beta$: $\mathcal{N}(j_1)$, starting at the position just after
+  $j_2$ (reused from the k2 walk, so no rescanning).
+\item $\gamma$: $\mathcal{N}(j_2)$, pre-advanced past $j_2$'s own index
+  (entries $\le j_2$ can never match the hub tail).
+\end{itemize}
+Let $h_\alpha, h_\beta, h_\gamma$ be the current candidate node indices.
+If all three are equal, we record the tetrahedron and advance all three.
+Otherwise every pointer at the current minimum is advanced:
+\begin{equation}
+\begin{aligned}
+  h_\alpha \le h_\beta \text{ and } h_\alpha \le h_\gamma &: \quad
+    \alpha \leftarrow \alpha + 1 \\
+  h_\beta \le h_\alpha \text{ and } h_\beta \le h_\gamma &: \quad
+    \beta \leftarrow \beta + 1 \\
+  h_\gamma \le h_\alpha \text{ and } h_\gamma \le h_\beta &: \quad
+    \gamma \leftarrow \gamma + 1
+\end{aligned}
+\label{eq:threeway}
+\end{equation}
+(Multiple conditions can be true simultaneously when two minima are tied;
+in that case multiple pointers are advanced in the same step.)  This
+visits each list at most once, giving $O(m)$ cost per $(i, j_1, j_2)$
+triple compared with two $O(\log m)$ binary searches in the original code.
+
+\subsection{Parity-decomposed 4PCF}
+\label{sec:parity}
+
+A standard 4PCF estimator gives one number per tetrahedron configuration.
+GRAMSCI v2 adds a parity decomposition that separates the signal into
+parity-even ($\zeta^{+}$) and parity-odd ($\zeta^{-}$) channels.  For each
+tetrahedron $(i, j_1, j_2, j_3)$, the handedness is determined by the
+signed volume
+\begin{equation}
+  V = (\mathbf{r}_{ij_1} \times \mathbf{r}_{ij_2}) \cdot \mathbf{r}_{ij_3}.
+  \label{eq:volume}
+\end{equation}
+The direction of each spoke is also quantised into a pixel on the unit
+sphere (stored as a single byte per edge at graph-construction time with
+${\sim}17\%$ memory overhead), enabling efficient grouping by parity at
+query time without retaining the original coordinates.
+
+Tetrahedra whose pixelised direction vectors give a mathematically zero
+signed volume (repeated pixels, coplanar pixel triples) have no defined
+chirality.  These are common --- repeated pixels alone account for a few
+per cent of all tetrahedra at typical pixelisations, comparable to the
+amplitude of the odd channel itself --- and assigning them a sign from the
+floating-point residue of Equation~(\ref{eq:volume}) would contaminate
+$\zeta^{-}$ with compiler- and hardware-dependent noise.  GRAMSCI therefore
+assigns degenerate tetrahedra ($|V| < 10^{-9}$) zero weight in the odd
+channel; the even channel is unaffected.
+
+The parity-odd 4PCF $\zeta^{-}$ vanishes for any statistically
+parity-symmetric field; a non-zero measurement signals parity violation.
+Searches for such a signal in BOSS galaxy catalogues \citep{hou23} have
+generated significant interest, and independent configuration-space
+measurements provide a direct cross-check on spherical-harmonic-based
+analyses.
+
+\subsection{Python interface}
+\label{sec:python}
+
+A lightweight Python package (requiring only NumPy) wraps the compiled
+Fortran binary.  Input/output is handled automatically through a temporary
+directory; the user supplies NumPy arrays and receives structured result
+objects:
+
+\begin{lstlisting}[caption={Minimal Python usage.},label=lst:python]
+import gramsci, numpy as np
+
+# pos: (N,3) float64,  weights: (N,) float64
+r3 = gramsci.compute_3pcf(
+        pos_data, w_data, pos_rand, w_rand,
+        rmin=1.0, rmax=30.0, nbins=6)
+print(r3.zeta)   # shape (n_configs,)
+print(r3.NNN, r3.r1, r3.r2, r3.r3)
+
+r4 = gramsci.compute_4pcf(
+        pos_data, w_data, pos_rand, w_rand,
+        rmin=1.0, rmax=30.0, nbins=3,
+        parity=True)
+print(r4.zeta_even)  # parity-even 4PCF
+print(r4.zeta_odd)   # parity-odd 4PCF
+\end{lstlisting}
+
+The package is installable with \texttt{pip install -e .} from the
+\texttt{python/} subdirectory of the repository.
+
+\subsection{GPU implementation}
+\label{sec:gpu}
+
+The dominant cost in every GRAMSCI query is the enumeration loop over
+hub--neighbour tuples --- millions of independent hubs, each performing
+$O(m^2)$ to $O(m^3)$ work on small sorted integer lists.  This structure
+maps naturally onto a GPU, and we have ported the complete query engine
+(3PCF, equilateral 3PCF, 4PCF, and parity 4PCF) to OpenACC, compiled with
+\textsc{nvfortran}.  The GPU binary, \texttt{gramsci\_gpu}, accepts the
+same command-line options and produces identical output formats to the CPU
+code.  Graph construction remains on the CPU (OpenMP) and is typically a
+small fraction of the total runtime.
+
+\subsubsection{Data layout}
+\label{sec:csr}
+
+The CPU code stores adjacency lists as per-node allocatable arrays, a
+structure that cannot be mapped to device memory.  The GPU path flattens
+the graph into a compressed-sparse-row (CSR) form: a 64-bit offset array
+$\mathtt{ptr}(1{:}N{+}1)$ and flat edge arrays holding the neighbour index
+(32-bit) and radial-bin index (8-bit) --- 5 bytes per edge, plus a
+direction-pixel byte for parity queries.  Edge counts routinely exceed
+$2^{31}$ for BAO-scale work (Section~\ref{sec:performance}), so all edge
+indexing is 64-bit.  During the flattening, each jagged row is freed as it
+is copied (with the freed pages explicitly returned to the operating
+system), holding peak host memory to approximately one live copy of the
+graph.
+
+\subsubsection{Kernel design}
+\label{sec:kernels}
+
+Three design rules, found empirically, determine GPU performance
+(Appendix~\ref{app:openacc} records the failure modes of the alternatives):
+
+\textit{One thread block per hub, vector lanes on the inner loop.}  Each
+hub is assigned to one OpenACC gang (CUDA thread block); the innermost
+neighbour loop is spread across the gang's vector lanes.  For a fixed
+hub--spoke pair, all lanes then search or read the \emph{same} adjacency
+list, so a warp's memory traffic is confined to one small, cache-resident
+segment.  Letting the compiler choose the mapping instead places a
+different hub on every vector lane, producing fully divergent memory
+access; we measured this na\"ive mapping to be $6\times$ slower than the
+64-thread CPU code, versus $2.6\times$ faster for the explicit mapping.
+
+\textit{Per-hub scratch via gang slots.}  The 4PCF kernels precompute, per
+hub, a local connectivity matrix $\mathtt{lmat}(k_2,k_1)$ holding the bin
+index of the edge between neighbours $k_1<k_2$, reducing the innermost
+tetrahedron loop to $O(1)$ array lookups: $C(m,2)$ searches replace the
+original $3\,C(m,3)$.  This matrix (up to several hundred kilobytes for
+dense graphs) cannot be a private array --- OpenACC privatises arrays per
+vector lane --- so each gang owns a slice of a global scratch array indexed
+by an explicit gang-slot loop.  The scratch extent is sized at runtime from
+the longest adjacency row of the actual graph.
+
+\textit{Atomic accumulation into slot-strided partials.}  Vector lanes
+within a gang race on shared accumulators, and compiler-generated array
+reductions across nested gang/vector loops proved unreliable or slow.
+Counts are instead accumulated with hardware floating-point atomics into
+per-slot partial arrays (one slot per gang, or hash-strided over $\sim$4k
+slots), which are summed on the host.  Atomic contention is negligible
+because concurrently resident gangs own distinct slots.
+
+\subsubsection{Out-of-core operation}
+\label{sec:chunking}
+
+At BAO scales a survey-sized graph exceeds any single GPU's memory: the
+DESI DR1 LRG North+South sample at $\rmax = 150\Mpch$ produces
+$9.0\times10^9$ edges (45\,GB of CSR).  The query kernels therefore
+support a chunked mode, selected automatically at runtime when the graph
+exceeds the free device memory.
+
+The kernel needs two kinds of row access: the hub's own row, and the row
+of any neighbour being searched.  The edge arrays are split into $W$
+row-aligned windows, and the query runs as a tile loop over (hub-window,
+search-window) combinations with only the active windows resident on the
+device.  A triangle at hub $i$ with spoke pair $(j_1, j_2)$ is processed
+exactly once --- in the tile whose hub window holds $i$'s row and whose
+search window holds $j_1$'s row --- and tiles skip foreign spokes with a
+single integer comparison.  For the 4PCF kernels, whose connectivity
+matrix draws on two different neighbour rows, tiles run over \emph{pairs}
+of search windows $(c_1 \le c_2)$; the sorted adjacency invariant
+guarantees each tetrahedron lands in exactly one tile.  Window sizes are
+derived at runtime from free device memory and can be overridden through
+an environment variable, which also provides a convenient way to exercise
+the chunked code paths on small test data.
+
+The measured cost of chunking is modest: the $9.0\times10^9$-edge DESI
+measurement above ran in 28 minutes on a 24\,GB RTX 3090~Ti, roughly 20\%
+slower than the extrapolated cost of a hypothetical all-resident run, the
+difference being PCIe re-transfers of the windows.
+
+%% ===================================================================
+\section{Performance Benchmarks}
+\label{sec:performance}
+
+\subsection{Test catalogue}
+
+All CPU benchmarks used a Gaussian mock with $N_g = 207\,246$ galaxies and
+$N_r = 500\,000$ randoms in a periodic box.  Timings are wall-clock
+seconds on a single node with 4 OpenMP threads, divided by thread count to
+give effective single-core seconds for fair comparison.  Radial bins are
+equally spaced from $r_\mathrm{min} = 1\Mpch$ to $\rmax$.
+
+\subsection{Merge-walk speedup}
+
+Table~\ref{tab:mergewalk} summarises the CPU results.  The speedup grows
+with $\rmax$ because the mean neighbour count $m \propto \rmax^3$ and the
+savings per inner-loop step scale as $\log_2 m$.  At $\rmax = 55\Mpch$
+($m \approx 700$) the 3PCF achieves $2\times$; at $\rmax = 40\Mpch$ the
+4PCF achieves $3.8\times$ because two independent binary searches were
+replaced by a single three-pointer walk.
+
+\begin{deluxetable}{lrrrr}
+\tablecaption{Wall-clock speedup of the merge-walk over binary search.
+\label{tab:mergewalk}}
+\tablehead{
+  \colhead{Kernel} & \colhead{$\rmax$} & \colhead{Bsearch} &
+  \colhead{Merge-walk} & \colhead{Speedup} \\
+  \colhead{} & \colhead{[$h^{-1}$Mpc]} & \colhead{[s]} &
+  \colhead{[s]} & \colhead{}
+}
+\startdata
+3PCF          & 30 &   6.6 &   4.5 & 1.46$\times$ \\
+3PCF          & 40 &    34 &    21 & 1.65$\times$ \\
+3PCF          & 55 &   223 &   109 & 2.04$\times$ \\
+4PCF          & 30 &  61.6 &  18.8 & 3.27$\times$ \\
+4PCF          & 40 & 666.7 & 174.1 & 3.83$\times$ \\
+4PCF (parity) & 30 &  69.2 &  24.8 & 2.79$\times$ \\
+\enddata
+\tablecomments{Single-node, 4 OpenMP threads; times divided by thread
+  count.  The 4PCF gain is larger than the 3PCF gain because the original
+  code had two binary searches in the innermost loop.}
+\end{deluxetable}
+
+\subsection{GPU speedup}
+\label{sec:gpubench}
+
+Table~\ref{tab:gpu} compares the GPU query kernels against the full
+64-thread CPU node (not single-core equivalents) on the same test
+catalogue and on the DESI DR1 LRG sample (Section~\ref{sec:desi}).  The
+GPU advantage grows with the order of the statistic: the 3PCF reaches
+$2.6\times$ over 64 CPU threads, while the 4PCF --- whose $O(m^3)$ inner
+loop amortises the per-hub setup --- reaches $9.0\times$.  In all cases
+the binned counts agree exactly with the CPU reference.
+
+\begin{deluxetable}{llrrr}
+\tablecaption{GPU query times vs.\ a 64-thread CPU node (RTX 3090~Ti
+  vs.\ 64 OpenMP threads).\label{tab:gpu}}
+\tablehead{
+  \colhead{Kernel} & \colhead{Catalogue} & \colhead{CPU$\times$64} &
+  \colhead{GPU} & \colhead{Speedup} \\
+  \colhead{} & \colhead{} & \colhead{[s]} & \colhead{[s]} & \colhead{}
+}
+\startdata
+3PCF, $\rmax{=}80$    & test (0.7M)    &   9.4 &   3.6 & 2.6$\times$ \\
+4PCF, $\rmax{=}50$    & test (0.7M)    &  15.7 &   2.9 & 5.5$\times$ \\
+4PCF, $\rmax{=}65$    & test (0.7M)    & 146.8 &  16.4 & 9.0$\times$ \\
+3PCF, $\rmax{=}120$   & DESI LRG (3.0M) & \nodata & 380 & \nodata \\
+3PCF, $\rmax{=}150$\tablenotemark{a} & DESI LRG (3.0M) & \nodata & 1674 & \nodata \\
+\enddata
+\tablenotetext{a}{Out-of-core: $9.0\times10^9$ edges (45\,GB CSR) on a
+  24\,GB device, $5\times5$ window tiles.}
+\tablecomments{Query time only; graph construction (CPU, OpenMP) adds
+  $\lesssim 10\%$ for the GPU runs. \todo{re-run CPU reference timings for
+  the DESI rows on the 64-thread node for completeness}}
+\end{deluxetable}
+
+\subsection{Correctness verification}
+\label{sec:correctness}
+
+Both implementations are run on the same catalogue and compared bin by
+bin.  All four GPU kernels (3PCF, equilateral 3PCF, 4PCF, parity 4PCF)
+were validated against the CPU reference in both single-pass and chunked
+modes --- eight combinations --- with exact agreement of all binned counts.
+The regression test suite (included in the repository) checks
+isolated-pair 2PCF, regular-tetrahedra connected 4PCF, and
+chiral-tetrahedra parity 4PCF against known analytic values, and
+\texttt{tests/benchmark\_3pcf.py} automates the CPU--GPU comparison.
+
+%% ===================================================================
+\section{Demonstration on DESI DR1 LRG}
+\label{sec:desi}
+
+\todo{tighten this section once EZmock error bars are final}
+
+As a realistic end-to-end demonstration we measure the 2PCF and 3PCF of
+the DESI DR1 LRG sample ($1.48$M galaxies NGC, $0.66$M SGC; weights
+$w \times w_{\rm FKP}$; DESI fiducial cosmology) with randoms subsampled
+1:1.  Galactic caps are measured independently and combined at the level
+of raw counts (weighting each cap's normalised counts by the cube --- or
+square, for pair counts --- of its summed data weights).
+
+The combined $r^2\xi(r)$ shows the acoustic peak at
+$r \simeq 97.5\Mpch$ with the expected dip--peak structure, recovered
+independently in both caps.  The 3PCF, measured to $\rmax = 150\Mpch$ in
+5$\Mpch$ bins (the out-of-core measurement of
+Table~\ref{tab:gpu}), shows the corresponding BAO feature: in the
+isoceles slice $\zeta(52, 78, r_3)$ the acoustic bump appears at
+$r_3 \simeq 107$--$118\Mpch$, an order of magnitude above the
+surrounding baseline, with both Galactic caps showing the rise
+independently.  Per-configuration uncertainties are estimated from 25 (of
+1000) EZmock realisations processed through the identical pipeline.
+
+\todo{Figure: 2PCF NGC/SGC/combined $r^2\xi$.  Figure: 3PCF slice with
+EZmock error bars.  Quote the measured runtimes per mock.}
+
+%% ===================================================================
+\section{Validation and Cosmology Dependence with Quijote}
+\label{sec:quijote}
+
+\todo{This section's measurements are planned; pipeline is in place.}
+
+\subsection{Setup}
+
+We use Friends-of-Friends halo catalogues from the Quijote simulation
+suite \citep{villaescusa20}: $512^3$ particles in $(1\,h^{-1}{\rm
+Gpc})^3$ boxes, with the fiducial cosmology and the single-parameter
+variations ($\Omega_{\rm m}^{\pm}$, $\sigma_8^{\pm}$, $h^{\pm}$,
+$n_s^{\pm}$).  A fixed number-density cut ($\bar n = \todo{value}$) is
+applied to each catalogue, and randoms are generated uniformly within the
+periodic box at 1:1.
+
+\subsection{Validation against the fiducial cosmology}
+
+\todo{3PCF of fiducial Quijote haloes vs.\ tree-level perturbation theory
+prediction at large scales; GPU vs.\ CPU agreement (exact) and timing at
+box scale.  N realisations for the error bars.}
+
+\subsection{Response of the 3PCF and 4PCF to cosmological parameters}
+
+\todo{For each varied parameter: measure 3PCF (20 bins to 150 Mpc/h) and
+4PCF (coarser bins) on $\mathcal{O}(50)$ realisations per cosmology;
+plot the fractional response $(\zeta_{\theta^+} -
+\zeta_{\theta^-})/\zeta_{\rm fid}$ per configuration with fiducial-mock
+error bars; discuss which configurations carry the strongest parameter
+sensitivity, and contrast with the 2PCF response.}
+
+%% ===================================================================
+\section{Scientific Applications}
+\label{sec:applications}
+
+\paragraph{Primordial non-Gaussianity}
+The connected 4PCF $\zeta_{\rm conn}$ is a direct configuration-space
+probe of the primordial trispectrum.  The $9\times$ GPU speedup at
+BAO-relevant scales makes it feasible to evaluate $\zeta_{\rm conn}$
+across the full BAO range for DESI-scale catalogues, where covariance
+estimation requires $\mathcal{O}(10^3)$ mock realisations.
+
+\paragraph{Parity violation}
+\citet{hou23} reported a non-zero parity-odd 4PCF in BOSS DR12 using a
+spherical-harmonic estimator.  The GRAMSCI configuration-space parity
+estimator provides a complementary cross-check that is sensitive to the
+full angular structure of the signal without assuming a harmonic
+decomposition.  The deterministic treatment of degenerate tetrahedra
+(Section~\ref{sec:parity}) is essential here: at the few-percent level the
+odd channel is otherwise contaminated by floating-point noise whose sign
+depends on the compiler and hardware.
+
+\paragraph{BAO with higher-order statistics}
+GRAMSCI supports anisotropic 3PCF and 4PCF (via $\mu$ binning for
+redshift-space distortions), enabling joint 2PCF+3PCF+4PCF BAO fits that
+extract additional signal-to-noise from the same catalogue.
+
+%% ===================================================================
+\section{Summary}
+\label{sec:summary}
+
+We have presented four additions to GRAMSCI:
+
+\begin{enumerate}
+\item \textbf{Merge-walk inner kernel.}  Replacing binary-search with
+  two-pointer sorted-set intersection reduces the 3PCF inner loop from
+  $O(m\log m)$ to $O(m)$ and the 4PCF inner loop --- which required two
+  binary searches --- correspondingly further.  Measured speedups are
+  1.5--2$\times$ for the 3PCF and 2.8--3.8$\times$ for the 4PCF at
+  survey-relevant scales.  The key prerequisite --- adjacency lists sorted
+  by node index --- was already guaranteed by the KD-tree construction and
+  required no data-structure change.
+\item \textbf{Parity-decomposed 4PCF.}  A direction-pixel byte stored per
+  edge at graph-construction time allows the 4PCF to be decomposed into
+  parity-even and parity-odd channels at negligible additional cost,
+  enabling direct tests of parity violation.  Degenerate (zero-volume)
+  tetrahedra are excluded from the odd channel deterministically.
+\item \textbf{Python interface.}  A thin NumPy-based wrapper calls the
+  Fortran engine via subprocess, handling all file I/O automatically and
+  returning structured result objects.
+\item \textbf{GPU port with out-of-core support.}  The complete query
+  engine runs on a single GPU via OpenACC with measured speedups of
+  $2.6\times$ (3PCF) to $9\times$ (4PCF) over a 64-thread node, and an
+  automatic window-tiling scheme processes graphs far larger than device
+  memory ($9\times10^9$ edges demonstrated on a 24\,GB card).  All kernels
+  reproduce the CPU reference exactly.
+\end{enumerate}
+
+The code is publicly available at \url{https://github.com/csabiu/Gramsci}.
+
+\vspace{5mm}
+
+\software{GRAMSCI \citep{sabiu19}; \textsc{kdtree2} \citep{kennel04};
+  NumPy \citep{harris20}; NVIDIA HPC SDK.}
+
+%% ===================================================================
+\appendix
+
+\section{OpenACC implementation notes}
+\label{app:openacc}
+
+We record four \textsc{nvfortran}/OpenACC behaviours that silently destroy
+performance or correctness in this class of kernel; each cost significant
+debugging effort and none is prominent in the standard documentation.
+
+\paragraph{Implicit gang--vector mapping}
+A bare \texttt{!\$ACC PARALLEL LOOP GANG} over hubs lets the compiler map
+the hub loop across gangs \emph{and} vector lanes, placing a different hub
+on every lane of a warp.  Each lane then traverses a different adjacency
+list: memory access is fully divergent and warp execution time is set by
+the largest hub in the warp.  An explicit inner \texttt{!\$ACC LOOP
+VECTOR} over the neighbour loop, with the hub loop on gangs only, changed
+this kernel from $6\times$ slower than the CPU node to $2.6\times$ faster.
+
+\paragraph{Private arrays are per-lane}
+Arrays in a \texttt{PRIVATE} clause of a gang loop with
+\texttt{VECTOR\_LENGTH} $> 1$ are allocated per vector lane, not per gang.
+A 360\,KB per-hub scratch array at vector length 64 implies 23\,MB per
+thread block --- far beyond the per-SM limit --- and fails at kernel launch
+with \texttt{CUDA\_ERROR\_ILLEGAL\_ADDRESS}.  The workaround is a global
+scratch array indexed by an explicit gang-slot loop.
+
+\paragraph{Array reductions}
+Reductions of multidimensional allocatable arrays do not reliably
+propagate device results back to the host, and array reductions declared
+on nested gang+vector loops re-reduce at the end of every inner-loop
+instance.  Slot-strided partial arrays updated with \texttt{ATOMIC
+UPDATE} and summed on the host are both correct and fast.
+
+\paragraph{By-reference scalar arguments go stale}
+Scalar arguments passed (by Fortran default) by reference into
+\texttt{!\$ACC ROUTINE} device functions receive a one-shot device copy
+that is \emph{not} refreshed on subsequent kernel launches: host-side
+updates between launches are silently ignored.  In the out-of-core tiles
+this manifested as out-of-bounds reads from the second tile onward, while
+scalars used directly in kernel code (which become \texttt{firstprivate})
+remained correct.  All scalar arguments of device routines must carry the
+\texttt{VALUE} attribute.
+
+\bibliography{gramsci_v2}
+\bibliographystyle{aasjournalv7}
+
+\end{document}
