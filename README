@@ -4,7 +4,7 @@
 ----- Cristiano Sabiu, csabiu@gmail.com ------
 ----------------------------------------------------------------------
 ----- Graph Database Solution for Higher Order Spatial Statistics in the Era of Big Data
------ Cristiano Sabiu, Ben Hoyle, Juhan Kim, XiaoDong Li 
+----- Cristiano Sabiu, Ben Hoyle, Juhan Kim, XiaoDong Li
 ----- arXiv: https://arxiv.org/abs/1901.00296
 ----- cite:  The Astrophysical Journal Supplement Series, Volume 242, Issue 2, article id. 29, 8 pp. (2019).
 ----------------------------------------------------------------------
@@ -14,61 +14,126 @@
  -----------------
 
 PURPOSE: Code for calculating the N-point Spatial Correlation Functions of a 3D point set.
-      
-      
+
+
  CALLING SEQUENCE:
        gramsci [-gal galaxy file][-ran ranfile (optional)]
-               [-rmin Rmin] [-rmax Rmax] [-nbins Nbins] 
-               [-nmu Nmu] [-out out_file] 
-  
-       eg: ./gramsci -rmin 10.0 -rmax 12.0 -nbins 10 [choose one: -2pcf -3pcf -4pcf]
-  
+               [-rmin Rmin] [-rmax Rmax] [-nbins Nbins]
+               [-nmu Nmu] [-out out_file]
+               [-2pcf | -3pcf | -equi | -4pcf | -4pcfp]
+               [-log] [-cut] [-mpi]
+
+       eg: ./gramsci -gal test.gal -ran test.ran -rmin 10.0 -rmax 12.0 -nbins 10 -2pcf -out result.dat
+
  INPUTS:
-    
-        out_file = filename for output correlation func. 
-    
-        Rmin = Min. radial seperation
-    
-        Rmax = Max. radial seperation
-  
+
+        -gal  = galaxy catalogue file (3-4 columns: x y z [weight])
+
+        -ran  = random catalogue file (same format as galaxy file)
+
+        -out  = filename for output correlation function
+
+        -rmin = Min. radial separation
+
+        -rmax = Max. radial separation
+
  OPTIONAL:
-        Nbins = Number of radial bins to calculate
-  
-        Nmu = Number of angular (mu) bins - linear in range -1<mu<+1
-  
+        -nbins = Number of radial bins (default 10)
+
+        -nmu   = Number of angular (mu) bins - linear in range -1 < mu < +1
+
+        -log   = Use logarithmic radial binning
+
+        -cut   = Use file format with selection cuts
+
+ QUERY MODES:
+
+        -2pcf  = 2-point correlation function (anisotropic, with mu bins)
+
+        -3pcf  = 3-point correlation function (all triangle configurations)
+
+        -equi  = 3-point correlation function (equilateral triangles only)
+
+        -4pcf  = 4-point correlation function (all tetrahedron configurations)
+
+        -4pcfp = 4-point correlation function with parity decomposition
+                 Separates even (parity-preserving) and odd (parity-violating)
+                 channels using direction pixel encoding for chirality detection.
+                 Output columns: bin edges, NNNN, RRRR, zeta_even, NNNN_odd, RRRR_odd, zeta_odd
+
+
+ALGORITHM
+---------
+GRAMSCI works in two phases:
+
+  1. Graph construction: A KD-tree is built from the input point set. For each
+     point, all neighbours within Rmax are found and stored as an adjacency list
+     (the "graph database"). Pairwise distances are binned at construction time,
+     so the graph stores integer bin indices rather than floating-point distances.
+     After the graph is built, the KD-tree and raw coordinates are deallocated.
+
+  2. Graph query: All subsequent N-point counting is performed entirely from the
+     graph adjacency lists, without reference to the original coordinates. This
+     is the key design principle that makes GRAMSCI fast: the graph is a compact,
+     cache-friendly data structure optimised for combinatorial enumeration.
+
+For the parity-aware 4PCF (-4pcfp), each edge additionally stores a single-byte
+"direction pixel" index encoding the angular direction of the displacement
+vector. This adds ~1 byte per edge (~17% overhead) and enables chirality
+classification of tetrahedra without retaining the original point coordinates.
+
+
+SOURCE MODULES
+--------------
+  src/
+    gramsci.F90             Main program and legacy 4PCF subroutines
+    config_module.F90       Configuration parameters, CLI parsing, shared arrays
+    io_module.F90           File I/O (catalogue reading, counting)
+    node_module.F90         Graph node type (adjacency list per point)
+    sorting_module.F90      Insertion sort for parallel arrays
+    graph_module.F90        Graph construction from KD-tree neighbours
+    graph_utils_module.F90  Utilities: binary search, distance lookup, etc.
+    query_2pcf_module.F90   2-point correlation function query
+    query_3pcf_module.F90   3-point correlation function query (all + equilateral)
+    query_4pcf_module.F90   4-point correlation function with parity decomposition
+    kdtree2.F90             KD-tree implementation (Matthew Kennel)
+    extension.F90           Fortran string/type extensions
+    domain_decomposition.f90  Spatial domain decomposition utility
 
 
  --------------------------------
  **    domain_decompose.sh     **
  --------------------------------
 
-PURPOSE: 
+PURPOSE:
 
-        Code for performing domain decomposition of the input catalogues
+        Code for performing domain decomposition of the input catalogues.
         This code is useful if the catalogues are large or the Rmax value is too large.
         Decomposing into more regions will reduce the RAM required of the graph database.
-        However, the correlation code must be ran on each region sepratley add the results 
+        However, the correlation code must be run on each region separately and the results
         collected later.
 
 CALLING SEQUENCE:
 
-      domain_decompose.sh [data_file] [random_file] [Nregion] [Rmax] 
- 
-      eg: domain_decompose.sh test.gal test.ran 4 100.0 
+      domain_decompose.sh [data_file] [random_file] [Nregion] [Rmax]
+
+      eg: domain_decompose.sh test.gal test.ran 4 100.0
 
 INPUTS:
        data_file = input catalogue 3-4 columns [x y z (weight)]
 
        random_file = input random catalogue 3-4 columns [x y z (weight)] - matching above file
 
-       Nregion = integer controlling the number of domain decomposed regions N^3. 
+       Nregion = integer controlling the number of domain decomposed regions N^3.
                  i.e. N=3 -> 27 regions
-   
-       Rmax = Max. radial seperation
+
+       Rmax = Max. radial separation
+
 
 BUILDING
 --------
-A Fortran compiler such as `gfortran` is required. To build the executables run:
+A Fortran compiler such as `gfortran` is required (with OpenMP support). To
+build the executables run:
 
 ```
 cd src
@@ -78,10 +143,34 @@ make all
 This will compile the code and place the `gramsci` and `domain_decomposition`
 executables in the `bin/` directory.
 
-TESTING
--------
-Run the unit tests with:
+On macOS, the Makefile automatically detects the SDK path for the system linker.
+
+For MPI-parallel builds, uncomment the MPI flags in the Makefile.
+
+
+GPU BUILD
+---------
+A GPU-accelerated build (`gramsci_gpu`, OpenACC / NVIDIA HPC SDK) lives in
+`src_gpu/`.  It accepts the same command-line options and produces the same
+output formats; the 3PCF, equilateral 3PCF, 4PCF and 4PCF-parity queries run
+on the GPU, with automatic out-of-core chunking for graphs larger than device
+memory.  See `src_gpu/README.md` for build instructions, design notes and
+benchmarks.
 
 ```
-make test
+cd src_gpu
+make            # requires nvfortran; installs bin/gramsci_gpu
 ```
+
+
+TESTING
+-------
+Run the regression tests with:
+
+```
+cd tests
+python3 run_correlation_tests.py
+```
+
+This exercises both the 2PCF and 3PCF queries against reference outputs to
+verify correctness.

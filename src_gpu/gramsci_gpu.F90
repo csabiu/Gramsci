@@ -1,4 +1,4 @@
-program Ngramsci
+program Ngramsci_gpu
   use kdtree2_module
   use kdtree2_precision_module
   use node_module
@@ -9,6 +9,9 @@ program Ngramsci
   use query_2pcf_module
   use query_3pcf_module
   use query_4pcf_module
+  use csr_module
+  use query_3pcf_gpu_module
+  use query_4pcf_gpu_module
   implicit none
 #ifdef MPI
   include 'mpif.h'
@@ -17,7 +20,8 @@ program Ngramsci
 
   type(kdtree2), pointer :: kd_tree
   integer :: i, j, nn2, thread, threads, ierr
-  real(kdkind) :: start, finish, rand_val, avg_neighbors
+  real(kdkind) :: start, rand_val, avg_neighbors
+  integer(8) :: wt0, wt1, wt_rate
   real(kdkind), allocatable :: sample_vec(:)
 #ifdef MPI
   integer, dimension(MPI_STATUS_SIZE) :: status
@@ -92,9 +96,7 @@ program Ngramsci
   if (cfg%rank == 0) print *, 'allocating arrays '
   call allocate_result_arrays()
 
-  ! ---- Memory estimation (first-principles) ----
-  ! Sample 100 random hubs to estimate mean neighbor count within rmax.
-  ! kdtree2_r_count_around_point returns a scalar count, no resultsb needed.
+  ! ---- Memory estimation ----
   allocate(sample_vec(100))
   do i = 1, 100
     call random_number(rand_val)
@@ -107,12 +109,9 @@ program Ngramsci
   if (cfg%rank == 0) then
     block
       integer :: bpe
-      real(kdkind) :: mem_half_gb, mem_peak_gb
-      ! Bytes per stored neighbor edge:
-      !   id(int32=4B) + dist(int8=1B) + mu(int8=1B) [+ phi(int8=1B) for parity]
+      real(kdkind) :: mem_half_gb
       bpe = 6
       if (cfg%four_pcf_parity) bpe = 7
-      ! Half-graph stores only edges where neighbor_id > hub_id → 0.5x entries
       mem_half_gb = dble(cfg%num_data + cfg%num_rand) * avg_neighbors &
                     * dble(bpe) * 0.5d0 / 1073741824.0d0
       print '("Est. graph RAM: ",f8.2," GB")', mem_half_gb
@@ -141,21 +140,21 @@ program Ngramsci
   !$ thread = OMP_GET_THREAD_NUM()
   !$OMP END PARALLEL
 
-  if (cfg%rank == cfg%master) print *, 'Code running with ', cfg%num_tasks, ' MPI processes each with ', threads, ' OMP threads'
+  if (cfg%rank == cfg%master) print *, 'Code running with ', cfg%num_tasks, &
+    ' MPI processes each with ', threads, ' OMP threads'
 
   call set_kd_tree(kd_tree)
 
-  ! cfg%half_graph = .true. is the default; only edges with neighbor_id > hub_id are stored.
-  call cpu_time(start)
+  ! Graph build: time with system_clock (wall time).
+  call system_clock(wt0, wt_rate)
   call create_graph(1, 999)
-  call cpu_time(finish)
+  call cpu_time(start)
   print '("Creating graph will take ~ ",f10.3," minutes.")', &
-    (finish - start) * (cfg%num_data + cfg%num_rand) / (60.0 * 1000.0 * threads)
-  print *, 'If this takes longer than time to drink a coffee, maybe you should give me more CPUs'
-  print *, 'Or consider decomposing the domain decomposition option with larger N.'
+    (start) * (cfg%num_data + cfg%num_rand) / (60.0 * 1000.0 * threads)
   call create_graph(1000, cfg%num_data + cfg%num_rand)
-  call cpu_time(finish)
-  print '("Creating the graph took ",f12.3," seconds.")', (finish - start) / threads
+  call system_clock(wt1)
+  print '("Creating the graph took ",f12.3," seconds.")', &
+    real(wt1 - wt0, kdkind) / real(wt_rate, kdkind)
 
   call kdtree2_destroy(kd_tree)
   deallocate(points)
@@ -165,24 +164,51 @@ program Ngramsci
 #endif
   if (cfg%rank == 0) print *, 'finished building node relationships '
 
-  ! ---- Query the graph ----
-  call cpu_time(start)
+  ! ---- Phase 1: CPU queries that need the jagged output(:) ----
+  ! These must all complete before build_csr() + output deallocation.
+  call system_clock(wt0)
   N2 = 0.0d0
   N3 = 0.0d0
 
+  ! 2PCF: CPU (O(N*m), fast; not worth GPU overhead)
   if (cfg%two_pcf) call query_graph_2pcf(1, cfg%num_data + cfg%num_rand)
-  if (cfg%three_pcf) call query_graph_3pcf_all(1, cfg%num_data + cfg%num_rand)
-  if (cfg%three_pcf_eq) call query_graph_equilateral_triangle(1, cfg%num_data + cfg%num_rand)
 
+  ! Equilateral 3PCF with RSD: CPU only (find_normal); isotropic runs on GPU below
+  if (cfg%three_pcf_eq .and. cfg%RSD) &
+    call query_graph_equilateral_triangle(1, cfg%num_data + cfg%num_rand)
+
+  ! RSD (anisotropic) 3PCF: GPU version does not support nmu>1, run on CPU now
+  if (cfg%three_pcf .and. cfg%RSD) then
+    if (cfg%rank == 0) print *, 'RSD 3PCF: running on CPU'
+    call query_graph_3pcf_all(1, cfg%num_data + cfg%num_rand)
+  end if
+
+  ! Internal 2PCF for disconnected 4PCF subtraction: CPU, uses output(:)
   if (cfg%four_pcf .or. cfg%four_pcf_parity) then
     call compute_2pcf_for_4pcf(1, cfg%num_data + cfg%num_rand)
   end if
+
+  ! ---- Flatten graph to CSR ----
+  ! build_csr frees each jagged row as it copies (and deallocates output),
+  ! keeping peak host RAM at ~one graph copy.  All subsequent kernels use CSR.
+  call build_csr()
+  if (cfg%rank == 0) print *, 'Jagged graph freed; using CSR from here'
+
+  ! ---- Phase 2: GPU queries using CSR ----
+
+  ! Isotropic 3PCF: GPU bsearch kernel
+  if (cfg%three_pcf .and. .not. cfg%RSD) &
+    call query_graph_3pcf_gpu(1, cfg%num_data + cfg%num_rand)
+
+  ! Isotropic equilateral 3PCF: GPU kernel (RSD case ran on CPU above)
+  if (cfg%three_pcf_eq .and. .not. cfg%RSD) &
+    call query_graph_equilateral_gpu(1, cfg%num_data + cfg%num_rand)
 
   if (cfg%four_pcf) then
     allocate(N4(cfg%n_configs_4pcf, 1))
     allocate(R4(cfg%n_configs_4pcf, 1))
     N4 = 0.0d0 ; R4 = 0.0d0
-    call query_graph_4pcf(1, cfg%num_data + cfg%num_rand)
+    call query_graph_4pcf_gpu(1, cfg%num_data + cfg%num_rand)
     deallocate(N4) ; deallocate(R4)
   end if
 
@@ -191,39 +217,30 @@ program Ngramsci
     allocate(N4(cfg%n_configs_4pcf, 2))
     allocate(R4(cfg%n_configs_4pcf, 2))
     N4 = 0.0d0 ; R4 = 0.0d0
-    call query_graph_4pcf_parity(1, cfg%num_data + cfg%num_rand)
+    call query_graph_4pcf_parity_gpu(1, cfg%num_data + cfg%num_rand)
     deallocate(N4) ; deallocate(R4)
     call cleanup_direction_lookup()
   end if
 
-  ! ---- Cleanup graph ----
-  do i = 1, size(output)
-    call output(i)%destroy()
-  end do
-  deallocate(output)
+  ! Report wall-clock query time (system_clock captures GPU execution correctly;
+  ! cpu_time/threads would show ~0 since the CPU idles while the GPU runs).
+  call system_clock(wt1)
+  print '("Querying graph took ",f12.3," seconds.")', &
+    real(wt1 - wt0, kdkind) / real(wt_rate, kdkind)
 
-  call cpu_time(finish)
-  print '("Querying graph took ",f12.3," seconds.")', (finish - start) / threads
+  call deallocate_csr()
 
+#ifdef MPI
+  call MPI_Barrier(MPI_COMM_WORLD, ierr)
+#endif
   if (cfg%rank == 0) print *, 'finished querying the graph'
-
-#ifdef MPI
-  call MPI_Barrier(MPI_COMM_WORLD, ierr)
-#endif
-  if (cfg%rank == 0) print *, 'collecting results from MPI tasks'
-  if (cfg%rank == 0) print *, 'results collected'
-
-#ifdef MPI
-  call MPI_Barrier(MPI_COMM_WORLD, ierr)
-#endif
-
-  call deallocate_arrays()
 
 #ifdef MPI
   call MPI_Barrier(MPI_COMM_WORLD, ierr)
   call MPI_FINALIZE(ierr)
 #endif
 
+  call deallocate_arrays()
   deallocate(buffer)
 
   if (cfg%rank == cfg%master) then
@@ -233,4 +250,4 @@ program Ngramsci
     stop
   end if
 
-end program Ngramsci
+end program Ngramsci_gpu
