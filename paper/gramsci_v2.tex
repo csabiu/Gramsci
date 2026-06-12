@@ -78,9 +78,11 @@ primordial density field and its subsequent gravitational evolution.  The
 two-point correlation function (2PCF) has been the workhorse of this
 programme \citep[e.g.][]{anderson14}, but higher-order statistics carry
 complementary information that is inaccessible to the power spectrum.  The
-3-point correlation function (3PCF) probes the bispectrum, which constrains
+3-point correlation function (3PCF), measured in galaxy catalogues since
+\citet{peebles75}, probes the bispectrum, which constrains
 primordial non-Gaussianity and galaxy bias
-\citep{sefusatti06,gaztanaga05}.  The connected 4-point correlation
+\citep{sefusatti06,gaztanaga05}, and has yielded a detection of the
+baryon acoustic peak in BOSS \citep{slepian17}.  The connected 4-point correlation
 function (4PCF) is related to the primordial trispectrum and provides
 additional leverage on inflationary models \citep{sefusatti07}.
 
@@ -93,8 +95,10 @@ factor still grows rapidly.
 Several codes are publicly available.  \textsc{TreeCorr} \citep{jarvis04}
 provides optimised 2PCF and 3PCF estimators for projected and
 three-dimensional catalogues.  \textsc{Corrfunc} \citep{sinha20} uses SIMD
-vectorisation (AVX2/AVX-512) for maximum 2PCF throughput.  \textsc{Encore}
-\citep{philcox22} expands the $N$-PCF in a spherical-harmonic basis,
+vectorisation (AVX2/AVX-512) for maximum 2PCF throughput.  A complementary algorithmic line, initiated by \citet{slepian15} and
+accelerated with FFTs by \citet{slepian16}, expands the correlators in a
+spherical-harmonic basis: \textsc{Encore}
+\citep{philcox22} extends this approach to the $N$-PCF,
 replacing direct enumeration with matrix products; this achieves favourable
 scaling at high neighbour density but does not directly yield a
 configuration-space connected 4PCF with parity decomposition.
@@ -127,7 +131,9 @@ sorted adjacency list:
   \label{eq:adjacency}
 \end{equation}
 Alongside each neighbour index, the radial-bin index (an integer byte) and
-optionally a direction-pixel byte (for the parity 4PCF) are stored.  The
+optionally a direction-pixel byte (for the parity 4PCF) are stored.
+Counts are accumulated with signed, normalised data-minus-random weights
+in the style of the \citet{landy93} and \citet{szapudi98} estimators.  The
 KD-tree and raw coordinates are then discarded; all subsequent NPCF queries
 operate entirely on the adjacency lists.
 
@@ -233,11 +239,12 @@ assigns degenerate tetrahedra ($|V| < 10^{-9}$) zero weight in the odd
 channel; the even channel is unaffected.
 
 The parity-odd 4PCF $\zeta^{-}$ vanishes for any statistically
-parity-symmetric field; a non-zero measurement signals parity violation.
-Searches for such a signal in BOSS galaxy catalogues \citep{hou23} have
-generated significant interest, and independent configuration-space
-measurements provide a direct cross-check on spherical-harmonic-based
-analyses.
+parity-symmetric field; a non-zero measurement signals parity violation
+\citep{cahn23}.  Searches for such a signal in BOSS galaxy catalogues
+\citep{hou23,philcox22parity} --- and most recently in DESI
+\citep{slepian25} --- have generated significant interest, and
+independent configuration-space measurements provide a direct cross-check
+on spherical-harmonic-based analyses.
 
 \subsection{Python interface}
 \label{sec:python}
@@ -627,7 +634,8 @@ bars show the scatter over three random realisations.
 \todo{tighten this section once EZmock error bars are final}
 
 As a realistic end-to-end demonstration we measure the 2PCF and 3PCF of
-the DESI DR1 LRG sample ($1.48$M galaxies NGC, $0.66$M SGC; weights
+the DESI DR1 LRG sample \citep{desi24} ($1.48$M galaxies NGC, $0.66$M
+SGC; weights
 $w \times w_{\rm FKP}$; DESI fiducial cosmology) with randoms subsampled
 1:1.  Galactic caps are measured independently and combined at the level
 of raw counts (weighting each cap's normalised counts by the cube --- or
@@ -642,7 +650,8 @@ isoceles slice $\zeta(52, 78, r_3)$ the acoustic bump appears at
 $r_3 \simeq 107$--$118\Mpch$, an order of magnitude above the
 surrounding baseline, with both Galactic caps showing the rise
 independently.  Per-configuration uncertainties are estimated from 25 (of
-1000) EZmock realisations processed through the identical pipeline.
+1000) EZmock realisations \citep{chuang15} processed through the
+identical pipeline.
 
 \todo{Figure: 2PCF NGC/SGC/combined $r^2\xi$.  Figure: 3PCF slice with
 EZmock error bars.  Quote the measured runtimes per mock.}
@@ -690,8 +699,10 @@ across the full BAO range for DESI-scale catalogues, where covariance
 estimation requires $\mathcal{O}(10^3)$ mock realisations.
 
 \paragraph{Parity violation}
-\citet{hou23} reported a non-zero parity-odd 4PCF in BOSS DR12 using a
-spherical-harmonic estimator.  The GRAMSCI configuration-space parity
+\citet{hou23} reported a non-zero parity-odd 4PCF in BOSS DR12 CMASS at
+$7.1\sigma$ using a spherical-harmonic estimator, with an independent
+analysis finding lower significance \citep{philcox22parity}; the first
+DESI measurement has recently appeared \citep{slepian25}.  The GRAMSCI configuration-space parity
 estimator provides a complementary cross-check that is sensitive to the
 full angular structure of the signal without assuming a harmonic
 decomposition.  The deterministic treatment of degenerate tetrahedra
