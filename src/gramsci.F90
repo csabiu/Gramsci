@@ -18,6 +18,7 @@ program Ngramsci
   type(kdtree2), pointer :: kd_tree
   integer :: i, j, nn2, thread, threads, ierr
   real(kdkind) :: start, finish, rand_val, avg_neighbors
+  logical :: use_bsearch
   real(kdkind), allocatable :: sample_vec(:)
 #ifdef MPI
   integer, dimension(MPI_STATUS_SIZE) :: status
@@ -170,8 +171,25 @@ program Ngramsci
   N2 = 0.0d0
   N3 = 0.0d0
 
+  ! GRAMSCI_BSEARCH=1 selects the legacy binary-search kernels (benchmarking
+  ! the v1 inner loop against the merge-walk; not exposed on the CLI).
+  block
+    character(8) :: env_bs
+    integer :: env_stat
+    call get_environment_variable('GRAMSCI_BSEARCH', env_bs, status=env_stat)
+    use_bsearch = (env_stat == 0)
+    if (use_bsearch .and. cfg%rank == 0) &
+      print *, 'NOTE: using legacy binary-search kernels (GRAMSCI_BSEARCH set)'
+  end block
+
   if (cfg%two_pcf) call query_graph_2pcf(1, cfg%num_data + cfg%num_rand)
-  if (cfg%three_pcf) call query_graph_3pcf_all(1, cfg%num_data + cfg%num_rand)
+  if (cfg%three_pcf) then
+    if (use_bsearch) then
+      call query_graph_3pcf_all_bsearch(1, cfg%num_data + cfg%num_rand)
+    else
+      call query_graph_3pcf_all(1, cfg%num_data + cfg%num_rand)
+    end if
+  end if
   if (cfg%three_pcf_eq) call query_graph_equilateral_triangle(1, cfg%num_data + cfg%num_rand)
 
   if (cfg%four_pcf .or. cfg%four_pcf_parity) then
@@ -182,7 +200,11 @@ program Ngramsci
     allocate(N4(cfg%n_configs_4pcf, 1))
     allocate(R4(cfg%n_configs_4pcf, 1))
     N4 = 0.0d0 ; R4 = 0.0d0
-    call query_graph_4pcf(1, cfg%num_data + cfg%num_rand)
+    if (use_bsearch) then
+      call query_graph_4pcf_bsearch(1, cfg%num_data + cfg%num_rand)
+    else
+      call query_graph_4pcf(1, cfg%num_data + cfg%num_rand)
+    end if
     deallocate(N4) ; deallocate(R4)
   end if
 
@@ -191,7 +213,11 @@ program Ngramsci
     allocate(N4(cfg%n_configs_4pcf, 2))
     allocate(R4(cfg%n_configs_4pcf, 2))
     N4 = 0.0d0 ; R4 = 0.0d0
-    call query_graph_4pcf_parity(1, cfg%num_data + cfg%num_rand)
+    if (use_bsearch) then
+      call query_graph_4pcf_parity_bsearch(1, cfg%num_data + cfg%num_rand)
+    else
+      call query_graph_4pcf_parity(1, cfg%num_data + cfg%num_rand)
+    end if
     deallocate(N4) ; deallocate(R4)
     call cleanup_direction_lookup()
   end if

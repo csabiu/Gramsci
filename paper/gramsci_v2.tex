@@ -371,6 +371,16 @@ seconds on a single node with 4 OpenMP threads, divided by thread count to
 give effective single-core seconds for fair comparison.  Radial bins are
 equally spaced from $r_\mathrm{min} = 1\Mpch$ to $\rmax$.
 
+All benchmarks in this paper compare implementations of the same estimator
+within GRAMSCI --- identical binning, identical outputs, identical hardware
+--- so every quoted speedup is directly attributable to the algorithmic or
+architectural change being tested.  We deliberately make no cross-code
+timing claims: the publicly available $N$-point codes
+(Section~\ref{sec:intro}) compute related but distinct quantities
+(projected versus three-dimensional statistics, harmonic-basis multipoles
+versus binned configuration-space functions), and timing comparisons
+across different output products are not meaningful.
+
 \subsection{Merge-walk speedup}
 
 Table~\ref{tab:mergewalk} summarises the CPU results.  The speedup grows
@@ -402,16 +412,111 @@ replaced by a single three-pointer walk.
   code had two binary searches in the innermost loop.}
 \end{deluxetable}
 
-\subsection{GPU speedup}
+\subsection{Three code generations}
 \label{sec:gpubench}
 
-Table~\ref{tab:gpu} compares the GPU query kernels against the full
-64-thread CPU node (not single-core equivalents) on the same test
-catalogue and on the DESI DR1 LRG sample (Section~\ref{sec:desi}).  The
-GPU advantage grows with the order of the statistic: the 3PCF reaches
-$2.6\times$ over 64 CPU threads, while the 4PCF --- whose $O(m^3)$ inner
-loop amortises the per-hub setup --- reaches $9.0\times$.  In all cases
-the binned counts agree exactly with the CPU reference.
+Figure~\ref{fig:scaling} shows the central benchmark of this paper: query
+time as a function of $\rmax$ for the three generations of the code ---
+the v1 binary-search kernels, the v2 merge-walk, and the GPU port --- all
+computing identical binned counts, with both CPU generations using all 64
+threads.  The merge-walk advantage measured at 4 threads
+(Table~\ref{tab:mergewalk}) persists at full thread count
+($3.2\times$ for the 3PCF and $3.7\times$ for the 4PCF at the largest
+common scales).  The GPU curves carry a fixed ${\sim}0.7$\,s offset (PCIe
+transfers and kernel launch), so the CPU wins below a crossover scale
+($\rmax \approx 55\Mpch$ for the 3PCF, ${\approx}35\Mpch$ for the 4PCF)
+beyond which the GPU pulls away along the same $r_{\rm max}^{6}$ and
+$r_{\rm max}^{9}$ power laws.  At $\rmax = 70\Mpch$ the 4PCF lineage reads
+$1044\,\mathrm{s} \to 280\,\mathrm{s} \to 26\,\mathrm{s}$: a cumulative
+$41\times$ from the original published kernel to the GPU on the same
+node.  Table~\ref{tab:gpu} adds measurements on the DESI DR1 LRG sample
+(Section~\ref{sec:desi}).  In all cases the binned counts agree exactly
+with the CPU reference.
+
+\begin{figure*}
+\centering
+\includegraphics[width=\textwidth]{figures/bench_scaling.pdf}
+\caption{Query time versus $\rmax$ for the three generations of GRAMSCI:
+the original binary-search kernels (v1, grey triangles), the merge-walk
+(v2, open blue circles), and the GPU port (red), for the 3PCF (left) and
+4PCF (right) on the test catalogue ($0.7$M points).  Both CPU generations
+use all 64 threads.  Grey guides show the expected
+$r_{\rm max}^{6}$ and $r_{\rm max}^{9}$ scalings of the pair- and
+triple-enumeration work.  The GPU pays a fixed ${\sim}0.7$\,s transfer
+cost and overtakes the CPU at $\rmax \approx 55$ ($35$)$\Mpch$ for the
+3PCF (4PCF).
+\label{fig:scaling}}
+\end{figure*}
+
+\subsection{Parallel scaling}
+\label{sec:threads}
+
+Figure~\ref{fig:threads} shows OpenMP strong scaling of the v2 CPU
+kernels from 1 to 64 threads, with the GPU time as a horizontal
+reference.  Both kernels scale with $76\%$ (3PCF) and $74\%$ (4PCF)
+efficiency at 64 threads --- the roll-off reflects the
+\texttt{reduction}-clause accumulator copies and dynamic-schedule load
+imbalance from the long tail of high-multiplicity hubs.  On these
+problems the single GPU matches roughly $95$--$100$ CPU cores of
+equivalent throughput.
+
+\begin{figure}
+\centering
+\includegraphics[width=\columnwidth]{figures/bench_threads.pdf}
+\caption{OpenMP strong scaling of the CPU query kernels (3PCF at
+$\rmax{=}70\Mpch$, 4PCF at $\rmax{=}40\Mpch$; dotted guides show ideal
+scaling).  Dashed horizontal lines mark the single-GPU times for the same
+problems.
+\label{fig:threads}}
+\end{figure}
+
+\subsection{Density dependence}
+\label{sec:density}
+
+Figure~\ref{fig:density} isolates the dependence on sample density by
+subsampling the test catalogue (galaxies and randoms together) at fixed
+$\rmax$.  Query time follows the expected $t \propto f^{3}$ for the 3PCF
+(hubs $\propto f$, pairs per hub $\propto f^{2}$) with a steeper
+$f^{3.3}$ for the 4PCF.  The GPU--CPU crossover sits near $f \approx
+0.4$: below it the fixed transfer cost dominates and the CPU is faster;
+above it the GPU advantage grows with density, reaching $2.6\times$
+(3PCF) and $6.1\times$ (4PCF) at full density and continuing to widen for
+denser samples.  Together with Figure~\ref{fig:scaling} this defines the
+regime where the GPU pays off: roughly, whenever the CPU query exceeds a
+few seconds.
+
+\begin{figure}
+\centering
+\includegraphics[width=\columnwidth]{figures/bench_density.pdf}
+\caption{Query time versus catalogue sampling fraction $f$ at fixed
+$\rmax$ (3PCF at $80\Mpch$, 4PCF at $50\Mpch$).  The grey guide shows
+$t \propto f^{3}$.  The GPU overtakes the 64-thread CPU near
+$f \approx 0.4$ and its advantage grows with density.
+\label{fig:density}}
+\end{figure}
+
+\subsection{Out-of-core overhead}
+\label{sec:chunkbench}
+
+Figure~\ref{fig:chunks} measures the cost of the window tiling of
+Section~\ref{sec:chunking} directly, by forcing a fixed problem (3PCF at
+$\rmax = 80\Mpch$, $1.9\times10^{8}$ edges) through $W = 1$--$8$ windows.
+Going out-of-core costs $12\%$ once, after which the overhead is nearly
+flat ($17\%$ at $W = 8$): the re-staged windows and repeated hub scans
+grow only linearly in $W$ while the dominant pair enumeration is
+partitioned, not repeated.  This plateau is corroborated at $50\times$
+the scale by the DESI measurement of Table~\ref{tab:gpu}, where the
+$9.0\times10^{9}$-edge query at $W = 5$ ran ${\sim}20\%$ above the
+single-window extrapolation.
+
+\begin{figure}
+\centering
+\includegraphics[width=\columnwidth]{figures/bench_chunks.pdf}
+\caption{Measured out-of-core overhead: query time for a fixed problem
+forced through $W$ edge windows, relative to the all-resident case.  The
+one-time ${\sim}12\%$ cost saturates rather than growing with $W$.
+\label{fig:chunks}}
+\end{figure}
 
 \begin{deluxetable}{llrrr}
 \tablecaption{GPU query times vs.\ a 64-thread CPU node (RTX 3090~Ti
@@ -434,6 +539,33 @@ the binned counts agree exactly with the CPU reference.
   $\lesssim 10\%$ for the GPU runs. \todo{re-run CPU reference timings for
   the DESI rows on the 64-thread node for completeness}}
 \end{deluxetable}
+
+\subsection{Expected performance on other hardware}
+\label{sec:otherhw}
+
+All GPU timings in this paper were obtained on a single consumer card
+(NVIDIA RTX 3090~Ti: Ampere, 24\,GB, ${\sim}1$\,TB\,s$^{-1}$ memory
+bandwidth).  The query kernels are bound by memory access --- sorted-list
+traversals, byte-wide bin loads, and table lookups --- rather than by
+floating-point throughput: the only FP64 work is a few multiplications and
+one atomic addition per accepted tuple.  Performance should therefore
+track \emph{memory bandwidth} rather than FP64 capability, and the large
+FP64 advantage of data-centre GPUs is largely irrelevant here.  On this
+basis we expect roughly $2\times$ on A100-class hardware
+(2.0\,TB\,s$^{-1}$) and $3$--$3.5\times$ on H100-class hardware
+(3.4\,TB\,s$^{-1}$), with the caveat that occupancy and atomic-throughput
+differences between architectures are not captured by this single-axis
+estimate.  Device memory capacity changes behaviour qualitatively rather
+than quantitatively: an 80\,GB card raises the single-pass ceiling to
+${\sim}1.5\times10^{10}$ edges --- the largest measurement in this paper
+would fit without tiling --- and eliminates the out-of-core overhead of
+Section~\ref{sec:chunking}, while NVLink-class host links shrink the
+transfer component of that overhead where tiling is still required.  These
+are expectations, not measurements.  Finally, the tile decomposition of
+Section~\ref{sec:chunking} partitions work by hub window with no
+communication between tiles, so a multi-GPU extension --- one hub window
+per device --- is straightforward in principle; we leave its
+implementation to future work.
 
 \subsection{Correctness verification}
 \label{sec:correctness}
