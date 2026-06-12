@@ -756,7 +756,17 @@ ${\sim}9$\,s per 4PCF realisation).
 Figure~\ref{fig:qfid} shows the equilateral 3PCF of the fiducial
 ensemble with box-to-box scatter: the expected hierarchical behaviour at
 small scales, a shallow negative trough at $35$--$50\Mpch$, and
-amplitudes consistent with zero at large separations.  The GPU and CPU
+amplitudes consistent with zero at large separations.  Notably, no
+acoustic feature is visible at $r \approx 105\Mpch$ even in the
+100-realisation mean: at tree level the 3PCF is built from products of
+two 2PCFs, so an equilateral configuration with all sides at the
+acoustic scale carries the feature only through $\xi(r_{\rm BAO})^2$ ---
+quadratically suppressed to ${\sim}10^{-5}$, below even the ensemble
+sensitivity here.  The acoustic signal in the 3PCF instead resides in
+isoceles configurations, $\zeta \sim \xi(r_{\rm short})\,
+\xi(r_{\rm BAO})$, which is the cut used for the DESI demonstration in
+Section~\ref{sec:desi} and the basis-compressed detections of
+\citet{slepian17}.  The GPU and CPU
 pipelines agree exactly on these catalogues (Section~\ref{sec:correctness});
 the purpose of this ensemble is to exercise the full pipeline at
 production scale and to furnish the error bars and null tests used below
