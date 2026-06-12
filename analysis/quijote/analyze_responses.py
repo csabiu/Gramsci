@@ -22,14 +22,25 @@ VARIATIONS = [('Om', r'$\Omega_{\rm m}$'), ('s8', r'$\sigma_8$'), ('h', r'$h$')]
 
 
 def load_stack(results, cosmo, suffix):
+    # column layout: 3pcf = 6 edges | NNN(6) RRR(7) zeta;  4pcf = 12 edges |
+    # NNNN(12) RRRR(13) zeta ...  (nvfortran wraps long headers over multiple
+    # lines, so skip all non-numeric leading rows)
+    ncol_edges, c_n, c_r = (6, 6, 7) if suffix == '3pcf' else (12, 12, 13)
     files = sorted(glob.glob(os.path.join(results, f'{cosmo}_r*.{suffix}')))
     stack, edges = [], None
     for fn in files:
-        x = np.loadtxt(fn, skiprows=1)
+        n_skip = 0
+        with open(fn) as f:
+            for line in f:
+                s = line.strip()
+                if s and (s[0].isdigit() or s[0] in '+-'):
+                    break
+                n_skip += 1
+        x = np.loadtxt(fn, skiprows=n_skip)
         if edges is None:
-            edges = x[:, :-3]   # all columns except NNN, RRR, zeta
+            edges = x[:, :ncol_edges]
         with np.errstate(divide='ignore', invalid='ignore'):
-            stack.append(x[:, -3] / x[:, -2])   # zeta = NNN/RRR
+            stack.append(x[:, c_n] / x[:, c_r])
     return edges, np.array(stack)
 
 
@@ -72,6 +83,7 @@ def main():
     ax.legend()
     plt.tight_layout()
     fig.savefig(os.path.join(outdir, 'quijote_fiducial_3pcf.png'), dpi=130)
+    fig.savefig(os.path.join(outdir, 'quijote_fiducial_3pcf.pdf'))
     print('wrote quijote_fiducial_3pcf.png')
 
     # Figure 2: fractional responses, equilateral cut
@@ -86,17 +98,18 @@ def main():
         derr = np.sqrt(np.nanvar(p, axis=0, ddof=1)/p.shape[0] +
                        np.nanvar(m, axis=0, ddof=1)/m.shape[0])
         with np.errstate(divide='ignore', invalid='ignore'):
-            resp = dmean / fid_mean
-            resp_err = np.abs(derr / fid_mean)
+            resp = dmean / fid_sig       # response per unit measurement scatter
+            resp_err = np.abs(derr / fid_sig)
         ax.errorbar(r_eq[o], resp[eq][o], yerr=resp_err[eq][o],
                     fmt='o-', capsize=3)
         ax.axhline(0, color='k', lw=0.5, alpha=0.5)
         ax.set_xlabel(r'$r$ [$h^{-1}$Mpc]')
         ax.set_title(label)
-    axes[0].set_ylabel(r'$(\zeta_{+} - \zeta_{-})\,/\,\zeta_{\rm fid}$')
+    axes[0].set_ylabel(r'$(\zeta_{+} - \zeta_{-})\,/\,\sigma_{\rm fid}$')
     fig.suptitle('3PCF response to parameter variations (equilateral)')
     plt.tight_layout()
     fig.savefig(os.path.join(outdir, 'quijote_3pcf_responses.png'), dpi=130)
+    fig.savefig(os.path.join(outdir, 'quijote_3pcf_responses.pdf'))
     print('wrote quijote_3pcf_responses.png')
 
     # ---------------- 4PCF ----------------
@@ -108,6 +121,7 @@ def main():
         print('no 4PCF outputs yet'); return
     n4 = fid4.shape[0]
     f4_mean = np.nanmean(fid4, axis=0)
+    f4_sig  = np.nanstd(fid4, axis=0, ddof=1)
 
     # equilateral tetrahedra: all six edge bins identical
     c4 = 0.5 * (e4[:, 0::2] + e4[:, 1::2])      # six edge-bin centres
@@ -126,18 +140,19 @@ def main():
         derr = np.sqrt(np.nanvar(p, axis=0, ddof=1)/p.shape[0] +
                        np.nanvar(m, axis=0, ddof=1)/m.shape[0])
         with np.errstate(divide='ignore', invalid='ignore'):
-            resp = dmean / f4_mean
-            resp_err = np.abs(derr / f4_mean)
+            resp = dmean / f4_sig
+            resp_err = np.abs(derr / f4_sig)
         ax.errorbar(r4[o4], resp[eq4][o4], yerr=resp_err[eq4][o4],
                     fmt='s-', capsize=3, color='C3')
         ax.axhline(0, color='k', lw=0.5, alpha=0.5)
         ax.set_xlabel(r'$r$ [$h^{-1}$Mpc]')
         ax.set_title(label)
-    axes[0].set_ylabel(r'$(\zeta^{(4)}_{+} - \zeta^{(4)}_{-})\,/\,\zeta^{(4)}_{\rm fid}$')
+    axes[0].set_ylabel(r'$(\zeta^{(4)}_{+} - \zeta^{(4)}_{-})\,/\,\sigma^{(4)}_{\rm fid}$')
     fig.suptitle(f'4PCF response to parameter variations '
                  f'(equilateral tetrahedra, {n4} fiducial realizations)')
     plt.tight_layout()
     fig.savefig(os.path.join(outdir, 'quijote_4pcf_responses.png'), dpi=130)
+    fig.savefig(os.path.join(outdir, 'quijote_4pcf_responses.pdf'))
     print('wrote quijote_4pcf_responses.png')
 
 

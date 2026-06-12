@@ -673,15 +673,14 @@ The complementary null test on cosmological density fields uses the
 parity-symmetric Quijote fiducial realisations
 (Section~\ref{sec:quijote}): gravity produces no chirality, so the
 parity-odd 4PCF measured on these boxes must be consistent with zero
-configuration by configuration.  Across 60 realisations
-%% TODO refresh count when the campaign completes (final: ~66)
+configuration by configuration.  Across 66 realisations
 and 638 well-measured configurations ($\rmax = 65\Mpch$, 5 radial bins)
 we find $\chi^2/{\rm dof} = 1.10$ for the mean parity-odd counts against
-zero, with $4.9\%$ of configurations beyond $2\sigma$ (Gaussian
+zero, with $5.6\%$ of configurations beyond $2\sigma$ (Gaussian
 expectation $4.6\%$).  The appropriate reference value is not unity:
 with $N_{\rm m}$ realisations the per-configuration error estimates make
 the z-scores Student-$t$ distributed, giving an expected
-$\chi^2/{\rm dof} = (N_{\rm m}-1)/(N_{\rm m}-3) = 1.04$, from which the
+$\chi^2/{\rm dof} = (N_{\rm m}-1)/(N_{\rm m}-3) = 1.03$, from which the
 measurement deviates by ${\sim}1\sigma$ before accounting for
 inter-configuration correlations.  The same statistic computed without
 the degenerate-volume rule of Section~\ref{sec:parity} would be
@@ -733,32 +732,99 @@ EZmock error bars.  Quote the measured runtimes per mock.}
 \section{Validation and Cosmology Dependence with Quijote}
 \label{sec:quijote}
 
-\todo{This section's measurements are planned; pipeline is in place.}
-
 \subsection{Setup}
 
 We use Friends-of-Friends halo catalogues from the Quijote simulation
 suite \citep{villaescusa20}: $512^3$ particles in $(1\,h^{-1}{\rm
-Gpc})^3$ boxes, with the fiducial cosmology and the single-parameter
-variations ($\Omega_{\rm m}^{\pm}$, $\sigma_8^{\pm}$, $h^{\pm}$,
-$n_s^{\pm}$).  A fixed number-density cut ($\bar n = \todo{value}$) is
-applied to each catalogue, and randoms are generated uniformly within the
-periodic box at 1:1.
+Gpc})^3$ boxes at $z = 0.5$, with the fiducial cosmology
+($\Omega_{\rm m} = 0.3175$, $\sigma_8 = 0.834$, $h = 0.6711$) and the
+paired single-parameter variations $\Omega_{\rm m}^{\pm}$ ($\pm 0.010$),
+$\sigma_8^{\pm}$ ($\pm 0.015$), and $h^{\pm}$ ($\pm 0.02$).  A fixed
+number-density cut $\bar n = 1.5\times10^{-4}\,(h/{\rm Mpc})^{3}$ ---
+the $150\,000$ most massive halos per box --- is applied identically to
+every catalogue, so that parameter responses reflect changes in
+clustering rather than abundance.  Randoms are uniform in the periodic
+box at 1:1.  We measure the 3PCF in 20 radial bins over
+$10$--$150\Mpch$ and the connected 4PCF in 5 bins to $65\Mpch$, for 100
+fiducial realisations and 50 per variation: 400 realisations and
+$1.0\times10^{6}$ binned configurations in total, completing in
+${\sim}10$ hours on the single GPU (${\sim}50$\,s per 3PCF and
+${\sim}9$\,s per 4PCF realisation).
 
-\subsection{Validation against the fiducial cosmology}
+\subsection{Fiducial measurement}
 
-\todo{3PCF of fiducial Quijote haloes vs.\ tree-level perturbation theory
-prediction at large scales; GPU vs.\ CPU agreement (exact) and timing at
-box scale.  N realisations for the error bars.}
+Figure~\ref{fig:qfid} shows the equilateral 3PCF of the fiducial
+ensemble with box-to-box scatter: the expected hierarchical behaviour at
+small scales, a shallow negative trough at $35$--$50\Mpch$, and
+amplitudes consistent with zero at large separations.  The GPU and CPU
+pipelines agree exactly on these catalogues (Section~\ref{sec:correctness});
+the purpose of this ensemble is to exercise the full pipeline at
+production scale and to furnish the error bars and null tests used below
+and in Section~\ref{sec:paritytest}.
+
+\begin{figure}
+\centering
+\includegraphics[width=0.95\columnwidth]{figures/quijote_fiducial_3pcf.pdf}
+\caption{Equilateral 3PCF of Quijote fiducial FoF halos at $z=0.5$
+(number density matched to $1.5\times10^{-4}\,(h/{\rm Mpc})^{3}$),
+averaged over 100 realisations.  Error bars show the box-to-box scatter
+of a single $(1\,h^{-1}{\rm Gpc})^3$ realisation.
+\label{fig:qfid}}
+\end{figure}
 
 \subsection{Response of the 3PCF and 4PCF to cosmological parameters}
+\label{sec:responses}
 
-\todo{For each varied parameter: measure 3PCF (20 bins to 150 Mpc/h) and
-4PCF (coarser bins) on $\mathcal{O}(50)$ realisations per cosmology;
-plot the fractional response $(\zeta_{\theta^+} -
-\zeta_{\theta^-})/\zeta_{\rm fid}$ per configuration with fiducial-mock
-error bars; discuss which configurations carry the strongest parameter
-sensitivity, and contrast with the 2PCF response.}
+Figures~\ref{fig:q3resp} and \ref{fig:q4resp} show the response of the
+equilateral 3PCF and 4PCF to each parameter pair,
+$(\zeta_{+} - \zeta_{-})/\sigma_{\rm fid}$, expressed in units of the
+single-realisation scatter so that the curves read directly as
+per-configuration detectability for a $1\,(h^{-1}{\rm Gpc})^3$ volume.
+(We normalise by the scatter rather than by $\zeta_{\rm fid}$ itself
+because the fiducial 3PCF crosses zero, where fractional responses are
+ill-defined.)
+
+Two features stand out.  First, the responses of both statistics are
+confined to quasi-linear scales: significant below
+$r \approx 35\Mpch$ and consistent with zero above.  Second, the
+parameter hierarchy is the same in both statistics:
+$\Omega_{\rm m}$ produces the strongest response
+(${\approx}1.5\,\sigma_{\rm fid}$ per configuration at
+$r \approx 14\Mpch$ for the quoted step sizes), $h$ is comparable
+(${\approx}1.1\,\sigma_{\rm fid}$), and $\sigma_8$ is markedly weaker
+(${\approx}0.5\,\sigma_{\rm fid}$).  This ordering is the expected
+consequence of the matched number density: a pure amplitude change
+($\sigma_8$) is largely absorbed by the implied shift of the halo mass
+threshold --- the familiar $\sigma_8$--bias degeneracy --- whereas
+$\Omega_{\rm m}$ and $h$ alter the shape of the underlying power
+spectrum (through $\Gamma \simeq \Omega_{\rm m} h$), which no threshold
+adjustment can mimic.  The full measurements span all $1540$ (3PCF) and
+$900$ (4PCF) configurations per realisation; the equilateral cuts shown
+here are illustrative, and we emphasise that this is a qualitative
+sensitivity demonstration rather than a Fisher forecast, which would
+additionally require the full configuration covariance.
+
+\begin{figure*}
+\centering
+\includegraphics[width=\textwidth]{figures/quijote_3pcf_responses.pdf}
+\caption{Response of the equilateral 3PCF to the Quijote parameter
+variations, in units of the single-realisation fiducial scatter.  Error
+bars propagate the ensemble errors of the variation means (50
+realisations per side).  The responses are confined to quasi-linear
+scales, and the matched number density suppresses the $\sigma_8$
+response relative to the shape parameters $\Omega_{\rm m}$ and $h$ (see
+text).
+\label{fig:q3resp}}
+\end{figure*}
+
+\begin{figure*}
+\centering
+\includegraphics[width=\textwidth]{figures/quijote_4pcf_responses.pdf}
+\caption{As Figure~\ref{fig:q3resp}, for the connected 4PCF on
+equilateral tetrahedra to $65\Mpch$.  The same scale dependence and
+parameter hierarchy appear.
+\label{fig:q4resp}}
+\end{figure*}
 
 %% ===================================================================
 \section{Scientific Applications}
