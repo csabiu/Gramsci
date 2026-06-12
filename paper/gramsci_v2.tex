@@ -661,12 +661,24 @@ an estimator bias, but the constant mixed-term contribution to the even
 channel at this configuration, which cancels only in the odd channel;
 count-level comparisons are the appropriate validation target.
 
-A complementary null test on cosmological density fields --- the
-parity-odd 4PCF measured across the parity-symmetric Quijote fiducial
-realisations, which must be consistent with zero configuration by
-configuration --- is reported in Section~\ref{sec:quijote}.
-\todo{add Quijote null-test numbers (chi2/dof over configs) when the
-campaign 4PCFp measurements complete}
+The complementary null test on cosmological density fields uses the
+parity-symmetric Quijote fiducial realisations
+(Section~\ref{sec:quijote}): gravity produces no chirality, so the
+parity-odd 4PCF measured on these boxes must be consistent with zero
+configuration by configuration.  Across 60 realisations
+%% TODO refresh count when the campaign completes (final: ~66)
+and 638 well-measured configurations ($\rmax = 65\Mpch$, 5 radial bins)
+we find $\chi^2/{\rm dof} = 1.10$ for the mean parity-odd counts against
+zero, with $4.9\%$ of configurations beyond $2\sigma$ (Gaussian
+expectation $4.6\%$).  The appropriate reference value is not unity:
+with $N_{\rm m}$ realisations the per-configuration error estimates make
+the z-scores Student-$t$ distributed, giving an expected
+$\chi^2/{\rm dof} = (N_{\rm m}-1)/(N_{\rm m}-3) = 1.04$, from which the
+measurement deviates by ${\sim}1\sigma$ before accounting for
+inter-configuration correlations.  The same statistic computed without
+the degenerate-volume rule of Section~\ref{sec:parity} would be
+contaminated by floating-point-noise-signed tetrahedra; the passing null
+validates that treatment at the field level.
 
 \begin{figure}
 \centering
