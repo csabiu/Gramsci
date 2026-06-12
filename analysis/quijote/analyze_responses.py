@@ -52,6 +52,35 @@ def cuts_3pcf(edges):
     return r1c, r2c, r3c, eq
 
 
+def slice_mask(edges, target1=50.0, target2=80.0):
+    """Isoceles slice: configurations containing the bins nearest target1
+    and target2; returns (r3 values, row indices) sorted by r3."""
+    r1c = 0.5 * (edges[:, 0] + edges[:, 1])
+    r2c = 0.5 * (edges[:, 2] + edges[:, 3])
+    r3c = 0.5 * (edges[:, 4] + edges[:, 5])
+    centers = np.unique(np.concatenate([r1c, r2c, r3c]))
+    t1 = centers[np.argmin(np.abs(centers - target1))]
+    t2 = centers[np.argmin(np.abs(centers - target2))]
+    rows, rvals = [], []
+    for i in range(edges.shape[0]):
+        vals = [r1c[i], r2c[i], r3c[i]]
+        used = [False] * 3
+        ok = True
+        for t in (t1, t2):
+            for j in range(3):
+                if not used[j] and abs(vals[j] - t) < 1e-6:
+                    used[j] = True
+                    break
+            else:
+                ok = False
+                break
+        if ok:
+            rows.append(i)
+            rvals.append(vals[used.index(False)])
+    o = np.argsort(rvals)
+    return np.array(rvals)[o], np.array(rows)[o], (t1, t2)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--results', default='/home/csabiu/data/quijote/results')
@@ -71,28 +100,40 @@ def main():
     r_eq = r1c[eq]
     o = np.argsort(r_eq)
 
-    # Figure 1: fiducial equilateral 3PCF with per-realization scatter
-    fig, ax = plt.subplots(figsize=(7, 5))
+    # Figure 1: fiducial 3PCF — equilateral + isoceles slice
+    r_sl, idx_sl, (t1, t2) = slice_mask(edges)
+    fig, axes2 = plt.subplots(1, 2, figsize=(10.5, 4.2))
+    ax = axes2[0]
     ax.errorbar(r_eq[o], (r_eq**2 * fid_mean[eq])[o],
                 yerr=(r_eq**2 * fid_sig[eq])[o],
                 fmt='o-', capsize=3, label=f'fiducial mean ({nfid} realizations)')
     ax.axhline(0, color='k', lw=0.5, alpha=0.5)
     ax.set_xlabel(r'$r$ [$h^{-1}$Mpc]')
     ax.set_ylabel(r'$r^2\,\zeta(r,r,r)$')
-    ax.set_title('Quijote FoF halos, z=0.5 — equilateral 3PCF')
+    ax.set_title('equilateral')
+    ax.legend()
+    ax = axes2[1]
+    ax.errorbar(r_sl, fid_mean[idx_sl], yerr=fid_sig[idx_sl],
+                fmt='s-', color='C3', capsize=3)
+    ax.axvline(105, color='gray', ls=':', alpha=0.8, label='BAO ~105 Mpc/h')
+    ax.axhline(0, color='k', lw=0.5, alpha=0.5)
+    ax.set_xlabel(r'$r_3$ [$h^{-1}$Mpc]')
+    ax.set_ylabel(rf'$\zeta({t1:.0f}, {t2:.0f}, r_3)$')
+    ax.set_title(f'isoceles slice ({t1:.0f}, {t2:.0f}, $r_3$)')
     ax.legend()
     plt.tight_layout()
     fig.savefig(os.path.join(outdir, 'quijote_fiducial_3pcf.png'), dpi=130)
     fig.savefig(os.path.join(outdir, 'quijote_fiducial_3pcf.pdf'))
     print('wrote quijote_fiducial_3pcf.png')
 
-    # Figure 2: fractional responses, equilateral cut
-    fig, axes = plt.subplots(1, len(VARIATIONS), figsize=(13, 4.4), sharey=True)
-    for ax, (par, label) in zip(axes, VARIATIONS):
+    # Figure 2: responses on equilateral (top row) and isoceles slice (bottom)
+    fig, axes = plt.subplots(2, len(VARIATIONS), figsize=(13, 7.6),
+                             sharey='row')
+    for col, (par, label) in enumerate(VARIATIONS):
         _, p = load_stack(args.results, f'{par}_p', '3pcf')
         _, m = load_stack(args.results, f'{par}_m', '3pcf')
         if p.size == 0 or m.size == 0:
-            ax.set_title(f'{label} (missing)')
+            axes[0, col].set_title(f'{label} (missing)')
             continue
         dmean = np.nanmean(p, axis=0) - np.nanmean(m, axis=0)
         derr = np.sqrt(np.nanvar(p, axis=0, ddof=1)/p.shape[0] +
@@ -100,13 +141,22 @@ def main():
         with np.errstate(divide='ignore', invalid='ignore'):
             resp = dmean / fid_sig       # response per unit measurement scatter
             resp_err = np.abs(derr / fid_sig)
+        ax = axes[0, col]
         ax.errorbar(r_eq[o], resp[eq][o], yerr=resp_err[eq][o],
                     fmt='o-', capsize=3)
         ax.axhline(0, color='k', lw=0.5, alpha=0.5)
-        ax.set_xlabel(r'$r$ [$h^{-1}$Mpc]')
         ax.set_title(label)
-    axes[0].set_ylabel(r'$(\zeta_{+} - \zeta_{-})\,/\,\sigma_{\rm fid}$')
-    fig.suptitle('3PCF response to parameter variations (equilateral)')
+        ax = axes[1, col]
+        ax.errorbar(r_sl, resp[idx_sl], yerr=resp_err[idx_sl],
+                    fmt='s-', color='C3', capsize=3)
+        ax.axhline(0, color='k', lw=0.5, alpha=0.5)
+        ax.set_xlabel(r'$r$ or $r_3$ [$h^{-1}$Mpc]')
+    axes[0, 0].set_ylabel(
+        r'equilateral: $(\zeta_{+} - \zeta_{-})\,/\,\sigma_{\rm fid}$')
+    axes[1, 0].set_ylabel(
+        rf'slice $({t1:.0f}, {t2:.0f}, r_3)$: '
+        r'$(\zeta_{+} - \zeta_{-})\,/\,\sigma_{\rm fid}$')
+    fig.suptitle('3PCF response to parameter variations')
     plt.tight_layout()
     fig.savefig(os.path.join(outdir, 'quijote_3pcf_responses.png'), dpi=130)
     fig.savefig(os.path.join(outdir, 'quijote_3pcf_responses.pdf'))

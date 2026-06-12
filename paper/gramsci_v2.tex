@@ -753,10 +753,13 @@ ${\sim}9$\,s per 4PCF realisation).
 
 \subsection{Fiducial measurement}
 
-Figure~\ref{fig:qfid} shows the equilateral 3PCF of the fiducial
-ensemble with box-to-box scatter: the expected hierarchical behaviour at
-small scales, a shallow negative trough at $35$--$50\Mpch$, and
-amplitudes consistent with zero at large separations.  Notably, no
+Figure~\ref{fig:qfid} shows the fiducial 3PCF with box-to-box scatter
+along two one-dimensional cuts through the full configuration space: the
+equilateral cut and the isoceles slice $\zeta(48, 76, r_3)$ used for the
+DESI demonstration of Section~\ref{sec:desi}.  Both show the expected
+hierarchical behaviour at small scales, a shallow negative trough at
+intermediate separations, and amplitudes consistent with zero at large
+scales.  Notably, no
 acoustic feature is visible at $r \approx 105\Mpch$ even in the
 100-realisation mean: at tree level the 3PCF is built from products of
 two 2PCFs, so an equilateral configuration with all sides at the
@@ -772,21 +775,22 @@ the purpose of this ensemble is to exercise the full pipeline at
 production scale and to furnish the error bars and null tests used below
 and in Section~\ref{sec:paritytest}.
 
-\begin{figure}
+\begin{figure*}
 \centering
-\includegraphics[width=0.95\columnwidth]{figures/quijote_fiducial_3pcf.pdf}
-\caption{Equilateral 3PCF of Quijote fiducial FoF halos at $z=0.5$
-(number density matched to $1.5\times10^{-4}\,(h/{\rm Mpc})^{3}$),
-averaged over 100 realisations.  Error bars show the box-to-box scatter
-of a single $(1\,h^{-1}{\rm Gpc})^3$ realisation.
+\includegraphics[width=0.92\textwidth]{figures/quijote_fiducial_3pcf.pdf}
+\caption{3PCF of Quijote fiducial FoF halos at $z=0.5$ (number density
+matched to $1.5\times10^{-4}\,(h/{\rm Mpc})^{3}$), averaged over 100
+realisations: the equilateral cut (left) and the isoceles slice
+$\zeta(48, 76, r_3)$ (right).  Error bars show the box-to-box scatter of
+a single $(1\,h^{-1}{\rm Gpc})^3$ realisation.
 \label{fig:qfid}}
-\end{figure}
+\end{figure*}
 
 \subsection{Response of the 3PCF and 4PCF to cosmological parameters}
 \label{sec:responses}
 
 Figures~\ref{fig:q3resp} and \ref{fig:q4resp} show the response of the
-equilateral 3PCF and 4PCF to each parameter pair,
+3PCF (equilateral and isoceles cuts) and 4PCF to each parameter pair,
 $(\zeta_{+} - \zeta_{-})/\sigma_{\rm fid}$, expressed in units of the
 single-realisation scatter so that the curves read directly as
 per-configuration detectability for a $1\,(h^{-1}{\rm Gpc})^3$ volume.
@@ -808,22 +812,26 @@ consequence of the matched number density: a pure amplitude change
 threshold --- the familiar $\sigma_8$--bias degeneracy --- whereas
 $\Omega_{\rm m}$ and $h$ alter the shape of the underlying power
 spectrum (through $\Gamma \simeq \Omega_{\rm m} h$), which no threshold
-adjustment can mimic.  The full measurements span all $1540$ (3PCF) and
-$900$ (4PCF) configurations per realisation; the equilateral cuts shown
-here are illustrative, and we emphasise that this is a qualitative
+adjustment can mimic.  The isoceles slice (bottom row of Figure~\ref{fig:q3resp}) shows the
+same scale dependence and hierarchy at weaker per-configuration
+amplitude, as expected for a cut whose sides sample lower-amplitude
+separations.  The full measurements span all $1540$ (3PCF) and
+$900$ (4PCF) configurations per realisation; the one-dimensional cuts
+shown here are illustrative, and we emphasise that this is a qualitative
 sensitivity demonstration rather than a Fisher forecast, which would
 additionally require the full configuration covariance.
 
 \begin{figure*}
 \centering
 \includegraphics[width=\textwidth]{figures/quijote_3pcf_responses.pdf}
-\caption{Response of the equilateral 3PCF to the Quijote parameter
-variations, in units of the single-realisation fiducial scatter.  Error
-bars propagate the ensemble errors of the variation means (50
+\caption{Response of the 3PCF to the Quijote parameter variations, in
+units of the single-realisation fiducial scatter, for the equilateral
+cut (top row) and the isoceles slice $\zeta(48, 76, r_3)$ (bottom row).
+Error bars propagate the ensemble errors of the variation means (50
 realisations per side).  The responses are confined to quasi-linear
-scales, and the matched number density suppresses the $\sigma_8$
-response relative to the shape parameters $\Omega_{\rm m}$ and $h$ (see
-text).
+scales with the same parameter hierarchy in both cuts, and the matched
+number density suppresses the $\sigma_8$ response relative to the shape
+parameters $\Omega_{\rm m}$ and $h$ (see text).
 \label{fig:q3resp}}
 \end{figure*}
 
