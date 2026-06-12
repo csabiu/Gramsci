@@ -102,7 +102,7 @@ def main():
 
     # Figure 1: fiducial 3PCF — equilateral + isoceles slice
     r_sl, idx_sl, (t1, t2) = slice_mask(edges)
-    fig, axes2 = plt.subplots(1, 2, figsize=(10.5, 4.2))
+    fig, axes2 = plt.subplots(2, 1, figsize=(4.6, 7.0))
     ax = axes2[0]
     ax.errorbar(r_eq[o], (r_eq**2 * fid_mean[eq])[o],
                 yerr=(r_eq**2 * fid_sig[eq])[o],
