@@ -154,6 +154,9 @@ def generate_chiral_tetra(n_struct, box_size, n_rand, seed, gal_file, ran_file,
             verts = right_verts
         elif handedness == 'balanced':
             verts = left_verts if i < n_struct // 2 else right_verts
+        elif isinstance(handedness, float):
+            # fractional: first round(x*n) structures left, rest right
+            verts = left_verts if i < round(handedness * n_struct) else right_verts
         else:
             raise ValueError(f"Unknown handedness: {handedness}")
 

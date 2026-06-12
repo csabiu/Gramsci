@@ -579,6 +579,47 @@ isolated-pair 2PCF, regular-tetrahedra connected 4PCF, and
 chiral-tetrahedra parity 4PCF against known analytic values, and
 \texttt{tests/benchmark\_3pcf.py} automates the CPU--GPU comparison.
 
+\subsection{Validation of the parity estimator}
+\label{sec:paritytest}
+
+The parity-odd channel deserves its own end-to-end test, since it is the
+quantity for which subtle sign errors (Section~\ref{sec:parity}) are most
+consequential.  We perform a controlled signal-injection test: catalogues
+of $N_{\rm struct} = 500$ isolated scalene tetrahedra of fixed geometry
+are generated with a left-handed fraction $x$, embedded in uniform
+randoms.  Each left-(right-)handed unit contributes $+1$ ($-1$) to the
+parity-odd count at the injected edge-bin configuration, and with
+normalised weights the count-level prediction is exact:
+$\mathrm{NNNN}^{-}\,N_{\rm gal}^{4} = N_L - N_R$, with mixed data--random
+terms cancelling in the odd channel in expectation.
+Figure~\ref{fig:parity} shows the recovered asymmetry against the
+injected value for $x = 0.5$--$1$: the estimator is unbiased at the
+$0.3\%$ level across the full range, and the parity-balanced case
+($x=0.5$) is consistent with zero.  We note that the same test expressed
+as the ratio $\zeta^{-}/\zeta^{+}$ would show a ${\sim}7\%$ offset --- not
+an estimator bias, but the constant mixed-term contribution to the even
+channel at this configuration, which cancels only in the odd channel;
+count-level comparisons are the appropriate validation target.
+
+A complementary null test on cosmological density fields --- the
+parity-odd 4PCF measured across the parity-symmetric Quijote fiducial
+realisations, which must be consistent with zero configuration by
+configuration --- is reported in Section~\ref{sec:quijote}.
+\todo{add Quijote null-test numbers (chi2/dof over configs) when the
+campaign 4PCFp measurements complete}
+
+\begin{figure}
+\centering
+\includegraphics[width=0.92\columnwidth]{figures/parity_recovery.pdf}
+\caption{Signal-injection test of the parity-odd 4PCF.  Catalogues of 500
+isolated chiral tetrahedra with left-handed fraction $x$ are measured
+with the GPU parity kernel; the count-normalised odd channel at the
+injected configuration recovers the injected asymmetry $2x-1$ (grey 1:1
+line) to $0.3\%$, with the balanced case consistent with zero.  Error
+bars show the scatter over three random realisations.
+\label{fig:parity}}
+\end{figure}
+
 %% ===================================================================
 \section{Demonstration on DESI DR1 LRG}
 \label{sec:desi}

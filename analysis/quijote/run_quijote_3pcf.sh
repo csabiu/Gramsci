@@ -51,6 +51,16 @@ for R in $(seq "$START" "$END"); do
         -out "$OUT4" -4pcf > "$OUTDIR/${COSMO}_r${R}.4pcf.log" 2>&1 \
         || { echo "  4PCF failed"; rm -f "$OUT4"; }
 
+    # Parity null test: parity-odd 4PCF on the (parity-symmetric) fiducial
+    # boxes must be consistent with zero.
+    if [ "$COSMO" = "fiducial" ]; then
+        OUTP="$OUTDIR/${COSMO}_r${R}.4pcfp"
+        "$GRAMSCI" -gal "$TMPDIR/cat.gal" -ran "$TMPDIR/cat.ran" \
+            -rmin 10.0 -rmax 65.0 -nbins 5 -nmu 1 \
+            -out "$OUTP" -4pcfp > "$OUTDIR/${COSMO}_r${R}.4pcfp.log" 2>&1 \
+            || { echo "  4PCFp failed"; rm -f "$OUTP"; }
+    fi
+
     rm -f "$TMPDIR"/cat.gal "$TMPDIR"/cat.ran
 done
 
