@@ -134,6 +134,7 @@ contains
     end do
     !$OMP END PARALLEL DO
 
+    call write_3pcf_results()
   end subroutine query_graph_3pcf_all_bsearch
 
   subroutine query_graph_equilateral_triangle(istart, iend)

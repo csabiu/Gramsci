@@ -377,6 +377,7 @@ contains
     end do
     !$OMP END PARALLEL DO
 
+    call write_4pcf_results()
   end subroutine query_graph_4pcf_parity_bsearch
 
   ! Merge-walk implementation (default).
@@ -569,6 +570,7 @@ contains
     end do
     !$OMP END PARALLEL DO
 
+    call write_4pcf_results_noparity()
   end subroutine query_graph_4pcf_bsearch
 
   ! Merge-walk implementation (default).
