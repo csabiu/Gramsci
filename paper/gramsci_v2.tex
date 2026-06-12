@@ -757,13 +757,44 @@ the data is reproduced by the ensemble.
 \subsection{4PCF versus the mock ensemble}
 \label{sec:desi4pcf}
 
-\todo{4PCF comparison: DESI z-binned connected 4PCF (rmin=20, rmax=65,
-4 bins, 276 configurations) vs the same 25 EZmocks --- measurements
-running; add figure and chi2 when complete.  Note: rmax=65 chosen after
-the rmax=80 trial showed the C(nn,3) cost is dominated by the heavy
-neighbour-count tail of the clustered LRG sample (2.6h for NGC zbin1
-alone) --- worth a sentence in the text about real-data vs uniform-mock
-scaling.}
+Figure~\ref{fig:desimock4} extends the comparison to the 4PCF: all 276
+configurations with $20 < r < 65\Mpch$ in 4 radial bins, for the same
+two redshift bins and the same 25 mocks (cap combination now with the
+fourth power of the summed weights).  The data track the mock ensemble
+across the full configuration space, with diagonal
+$\chi^2/{\rm dof} = 1.22$ ($0.4 < z \le 0.8$, 267 valid
+configurations) and $0.57$ ($0.8 < z \le 1.1$, 265); with 25 mocks the
+per-configuration scatter estimates are themselves uncertain at the
+${\sim}15\%$ level and the heavy-tailed sparse configurations widen the
+expected range of the diagonal statistic, so both values indicate
+consistency.  Configurations whose random quadruplet counts vanish in
+any single mock are excluded (9--11 of 276).
+
+A practical note on cost: the same measurement at $\rmax = 80\Mpch$
+takes $2.6$\,h for the larger redshift bin of the NGC --- an order of
+magnitude beyond the uniform-catalogue scaling of
+Section~\ref{sec:gpubench} --- because the $C(m,3)$ tetrahedron
+enumeration is dominated by the high-multiplicity tail of the neighbour
+distribution, which is far heavier in clustered, FKP-weighted survey
+data than in quasi-uniform test catalogues ($\langle m^3 \rangle \gg
+\langle m \rangle^3$).  The approximate EZmocks, which underpredict
+the most extreme small-scale clustering, run ${\sim}4\times$ faster
+than the data at identical sample size.  Benchmarks calibrated on
+uniform catalogues should therefore be treated as lower bounds for
+survey-data 4PCF work.
+
+\begin{figure*}
+\centering
+\includegraphics[width=0.94\textwidth]{figures/desi_vs_ezmock_4pcf.pdf}
+\caption{DESI DR1 LRG 4PCF ($\zeta^{(4)} = \mathrm{NNNN}/\mathrm{RRRR}$)
+versus the EZmock ensemble over all 276 configurations
+($20 < r < 65\Mpch$, 4 radial bins; canonical configuration ordering),
+for the two redshift bins.  NGC and SGC are combined at the count level
+in both data and mocks; the band is the ensemble mean $\pm 1\sigma$
+over 25 realisations.  Isolated wide bands mark sparse configurations
+with poorly determined mock scatter.
+\label{fig:desimock4}}
+\end{figure*}
 
 %% ===================================================================
 \section{Validation on N-body Simulations}
