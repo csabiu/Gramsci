@@ -431,6 +431,14 @@ seconds on a single node with 4 OpenMP threads, divided by thread count to
 give effective single-core seconds for fair comparison.  Radial bins are
 equally spaced from $r_\mathrm{min} = 1\Mpch$ to $\rmax$.
 
+Benchmarks were run on a shared (but lightly loaded) workstation rather
+than a dedicated node.  To quantify the resulting timing noise, several
+configurations were measured repeatedly at different times during the
+campaign: CPU timings reproduce to $0.6$--$1.1\%$ and GPU timings to
+${\lesssim}5\%$, far below the effects reported here.  \todo{re-verify
+sentinel timings on a quiescent node before submission
+(analysis/benchmarks/verify\_sentinels.py)}
+
 All benchmarks in this paper compare implementations of the same estimator
 within GRAMSCI --- identical binning, identical outputs, identical hardware
 --- so every quoted speedup is directly attributable to the algorithmic or
