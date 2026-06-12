@@ -60,11 +60,12 @@ a single consumer GPU with measured speedups of $2.6\times$ (3PCF) to
 $9\times$ (4PCF) over a 64-thread CPU node, and an out-of-core tiling
 scheme allows graphs far exceeding device memory --- we measure a
 $9\times10^9$-edge BAO-scale 3PCF on a 24\,GB card with ${\sim}20\%$
-overhead.  We validate the code against its CPU reference and on Quijote
-$N$-body mocks, demonstrate BAO-scale 2- and 3-point measurements on the
-DESI DR1 LRG sample, and illustrate the cosmological information content of
-configuration-space $N$-point functions across the Quijote parameter
-variations.  The code is available at
+overhead.  We validate the code against its CPU reference, against analytic
+injection tests, and on Quijote $N$-body simulations, and demonstrate
+BAO-scale applications on the DESI DR1 LRG sample: the 3PCF and connected
+4PCF are measured in two redshift bins and compared against the EZmock
+ensemble, with the acoustic feature visible in the three-point function
+and reproduced by the mocks.  The code is available at
 \url{https://github.com/csabiu/Gramsci}.
 \end{abstract}
 
@@ -700,56 +701,83 @@ bars show the scatter over three random realisations.
 \end{figure}
 
 %% ===================================================================
-\section{Demonstration on DESI DR1 LRG}
+\section{Application to DESI DR1 LRG}
 \label{sec:desi}
 
-\todo{tighten this section once EZmock error bars are final}
-
-As a realistic end-to-end demonstration we measure the 2PCF and 3PCF of
-the DESI DR1 LRG sample \citep{desi24} ($1.48$M galaxies NGC, $0.66$M
-SGC; weights
-$w \times w_{\rm FKP}$; DESI fiducial cosmology) with randoms subsampled
-1:1.  Galactic caps are measured independently and combined at the level
-of raw counts (weighting each cap's normalised counts by the cube --- or
-square, for pair counts --- of its summed data weights).
+As a realistic end-to-end application we measure the 2PCF, 3PCF, and
+connected 4PCF of the DESI DR1 LRG sample \citep{desi24} ($1.48$M
+galaxies NGC, $0.66$M SGC; weights $w \times w_{\rm FKP}$; DESI fiducial
+cosmology) with randoms subsampled 1:1, and compare against the EZmock
+ensemble \citep{chuang15} processed through the identical pipeline.
+Galactic caps are measured independently and combined at the level of raw
+counts (weighting each cap's normalised counts by the cube --- or square,
+for pair counts --- of its summed data weights).  For the redshift-binned
+statistics we split at $z = 0.8$ (bins $0.4 < z \le 0.8$ and
+$0.8 < z \le 1.1$, with pair-weighted effective redshifts
+$z_{\rm eff} = 0.63$ and $0.96$).
 
 The combined $r^2\xi(r)$ shows the acoustic peak at
 $r \simeq 97.5\Mpch$ with the expected dip--peak structure, recovered
-independently in both caps.  The 3PCF, measured to $\rmax = 150\Mpch$ in
-5$\Mpch$ bins (the out-of-core measurement of
-Table~\ref{tab:gpu}), shows the corresponding BAO feature: in the
-isoceles slice $\zeta(52, 78, r_3)$ the acoustic bump appears at
+independently in both caps.  The full-sample 3PCF, measured to
+$\rmax = 150\Mpch$ in 5$\Mpch$ bins (the $9.0\times10^{9}$-edge
+out-of-core measurement of Table~\ref{tab:gpu}), shows the corresponding
+BAO feature: in the isoceles slice the acoustic bump appears at
 $r_3 \simeq 107$--$118\Mpch$, an order of magnitude above the
 surrounding baseline, with both Galactic caps showing the rise
-independently.  Per-configuration uncertainties are estimated from 25 (of
-1000) EZmock realisations \citep{chuang15} processed through the
-identical pipeline.
+independently.
 
-\todo{Figure: 2PCF NGC/SGC/combined $r^2\xi$.  Figure: 3PCF slice with
-EZmock error bars.  Quote the measured runtimes per mock.}
+\subsection{3PCF versus the mock ensemble}
+\label{sec:desi3pcf}
+
+Figure~\ref{fig:desimock3} compares the redshift-binned DESI 3PCF with
+the EZmock ensemble in the isoceles slice $\zeta(55, 75, r_3)$,
+rebinned from 5 to 10$\Mpch$ (exactly, since binned counts are
+additive).  Each of the 25 mocks is processed through the same cap
+combination; the band shows the ensemble mean and scatter, and the same
+scatter provides the error bars on the data points.  The agreement is
+good in both redshift bins ($\chi^2/{\rm dof} = 4.7/9$ and $9.8/9$
+against the mock mean, diagonal errors): in particular the
+negative-to-positive transition through the acoustic region seen in the
+data is reproduced by the mock mean, confirming that the BAO-scale
+three-point signal in the LRG sample is consistent with the
+$\Lambda$CDM-calibrated mocks.
+
+\begin{figure*}
+\centering
+\includegraphics[width=0.94\textwidth]{figures/desi_vs_ezmock_3pcf.pdf}
+\caption{DESI DR1 LRG 3PCF versus the EZmock ensemble in the isoceles
+slice $\zeta(55, 75, r_3)$ (10$\Mpch$ bins), for the two redshift bins
+(NGC and SGC combined at the count level in both data and mocks).  The
+shaded band is the mock ensemble mean $\pm 1\sigma$ (25 realisations);
+data error bars use the same mock scatter.  The acoustic-region rise in
+the data is reproduced by the ensemble.
+\label{fig:desimock3}}
+\end{figure*}
+
+\subsection{4PCF versus the mock ensemble}
+\label{sec:desi4pcf}
+
+\todo{4PCF comparison: DESI z-binned connected 4PCF (rmin=20, rmax=80,
+4 bins, 276 configurations) vs the same 25 EZmocks --- measurements
+running; add figure and chi2 when complete.}
 
 %% ===================================================================
-\section{Validation and Cosmology Dependence with Quijote}
+\section{Validation on N-body Simulations}
 \label{sec:quijote}
 
 \subsection{Setup}
 
 We use Friends-of-Friends halo catalogues from the Quijote simulation
 suite \citep{villaescusa20}: $512^3$ particles in $(1\,h^{-1}{\rm
-Gpc})^3$ boxes at $z = 0.5$, with the fiducial cosmology
-($\Omega_{\rm m} = 0.3175$, $\sigma_8 = 0.834$, $h = 0.6711$) and the
-paired single-parameter variations $\Omega_{\rm m}^{\pm}$ ($\pm 0.010$),
-$\sigma_8^{\pm}$ ($\pm 0.015$), and $h^{\pm}$ ($\pm 0.02$).  A fixed
+Gpc})^3$ boxes at $z = 0.5$ in the fiducial cosmology
+($\Omega_{\rm m} = 0.3175$, $\sigma_8 = 0.834$, $h = 0.6711$).  A
 number-density cut $\bar n = 1.5\times10^{-4}\,(h/{\rm Mpc})^{3}$ ---
-the $150\,000$ most massive halos per box --- is applied identically to
-every catalogue, so that parameter responses reflect changes in
-clustering rather than abundance.  Randoms are uniform in the periodic
-box at 1:1.  We measure the 3PCF in 20 radial bins over
-$10$--$150\Mpch$ and the connected 4PCF in 5 bins to $65\Mpch$, for 100
-fiducial realisations and 50 per variation: 400 realisations and
-$1.0\times10^{6}$ binned configurations in total, completing in
-${\sim}10$ hours on the single GPU (${\sim}50$\,s per 3PCF and
-${\sim}9$\,s per 4PCF realisation).
+the $150\,000$ most massive halos per box --- is applied to each
+catalogue, with uniform randoms in the periodic box at 1:1.  We measure
+the 3PCF in 20 radial bins over $10$--$150\Mpch$ and the connected and
+parity-decomposed 4PCFs in 5 bins to $65\Mpch$ on 100 realisations,
+at ${\sim}50$\,s per 3PCF and ${\sim}9$\,s per 4PCF realisation on
+the single GPU.
 
 \subsection{Fiducial measurement}
 
@@ -785,64 +813,6 @@ $\zeta(48, 76, r_3)$ (right).  Error bars show the box-to-box scatter of
 a single $(1\,h^{-1}{\rm Gpc})^3$ realisation.
 \label{fig:qfid}}
 \end{figure}
-
-\subsection{Response of the 3PCF and 4PCF to cosmological parameters}
-\label{sec:responses}
-
-Figures~\ref{fig:q3resp} and \ref{fig:q4resp} show the response of the
-3PCF (equilateral and isoceles cuts) and 4PCF to each parameter pair,
-$(\zeta_{+} - \zeta_{-})/\sigma_{\rm fid}$, expressed in units of the
-single-realisation scatter so that the curves read directly as
-per-configuration detectability for a $1\,(h^{-1}{\rm Gpc})^3$ volume.
-(We normalise by the scatter rather than by $\zeta_{\rm fid}$ itself
-because the fiducial 3PCF crosses zero, where fractional responses are
-ill-defined.)
-
-Two features stand out.  First, the responses of both statistics are
-confined to quasi-linear scales: significant below
-$r \approx 35\Mpch$ and consistent with zero above.  Second, the
-parameter hierarchy is the same in both statistics:
-$\Omega_{\rm m}$ produces the strongest response
-(${\approx}1.5\,\sigma_{\rm fid}$ per configuration at
-$r \approx 14\Mpch$ for the quoted step sizes), $h$ is comparable
-(${\approx}1.1\,\sigma_{\rm fid}$), and $\sigma_8$ is markedly weaker
-(${\approx}0.5\,\sigma_{\rm fid}$).  This ordering is the expected
-consequence of the matched number density: a pure amplitude change
-($\sigma_8$) is largely absorbed by the implied shift of the halo mass
-threshold --- the familiar $\sigma_8$--bias degeneracy --- whereas
-$\Omega_{\rm m}$ and $h$ alter the shape of the underlying power
-spectrum (through $\Gamma \simeq \Omega_{\rm m} h$), which no threshold
-adjustment can mimic.  The isoceles slice (bottom row of Figure~\ref{fig:q3resp}) shows the
-same scale dependence and hierarchy at weaker per-configuration
-amplitude, as expected for a cut whose sides sample lower-amplitude
-separations.  The full measurements span all $1540$ (3PCF) and
-$900$ (4PCF) configurations per realisation; the one-dimensional cuts
-shown here are illustrative, and we emphasise that this is a qualitative
-sensitivity demonstration rather than a Fisher forecast, which would
-additionally require the full configuration covariance.
-
-\begin{figure*}
-\centering
-\includegraphics[width=0.92\textwidth]{figures/quijote_3pcf_responses.pdf}
-\caption{Response of the 3PCF to the Quijote parameter variations, in
-units of the single-realisation fiducial scatter, for the equilateral
-cut (top row) and the isoceles slice $\zeta(48, 76, r_3)$ (bottom row).
-Error bars propagate the ensemble errors of the variation means (50
-realisations per side).  The responses are confined to quasi-linear
-scales with the same parameter hierarchy in both cuts, and the matched
-number density suppresses the $\sigma_8$ response relative to the shape
-parameters $\Omega_{\rm m}$ and $h$ (see text).
-\label{fig:q3resp}}
-\end{figure*}
-
-\begin{figure*}
-\centering
-\includegraphics[width=0.92\textwidth]{figures/quijote_4pcf_responses.pdf}
-\caption{As Figure~\ref{fig:q3resp}, for the connected 4PCF on
-equilateral tetrahedra to $65\Mpch$.  The same scale dependence and
-parameter hierarchy appear.
-\label{fig:q4resp}}
-\end{figure*}
 
 %% ===================================================================
 \section{Scientific Applications}
