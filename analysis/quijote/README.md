@@ -22,8 +22,8 @@ Quijote FoF halo catalogs (Villaescusa-Navarro et al. 2020),
 | s8_p, s8_m | 50 each      | dζ/dσ8                 |
 | h_p, h_m   | 50 each      | dζ/dh                  |
 
-Halo selection: number density cut n = 2×10⁻⁴ (h/Mpc)³ (most massive
-halos first) → 200,000 halos per box, matched across cosmologies so the
+Halo selection: number density cut n = 1.5×10⁻⁴ (h/Mpc)³ (most massive
+halos first) → 150,000 halos per box, matched across cosmologies so the
 response isolates clustering, not abundance. Randoms: uniform in the box,
 1:1.
 

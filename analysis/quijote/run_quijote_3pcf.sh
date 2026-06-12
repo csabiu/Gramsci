@@ -14,7 +14,7 @@ QUIJOTE_ROOT=${QUIJOTE_ROOT:-/home/csabiu/data/quijote}
 OUTDIR=${OUTDIR:-/home/csabiu/data/quijote/results}
 TMPDIR=/tmp/quijote_run
 SNAP=2          # z = 0.5
-NDENS=2e-4      # (h/Mpc)^3, matched across cosmologies
+NDENS=1.5e-4      # (h/Mpc)^3, matched across cosmologies
 
 COSMO=${1:?usage: run_quijote_3pcf.sh <cosmo> <start> <end>}
 START=${2:-0}

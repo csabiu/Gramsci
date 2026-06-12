@@ -64,7 +64,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--fof-dir', required=True)
     ap.add_argument('--snapnum', type=int, default=2)        # z=0.5
-    ap.add_argument('--ndens', type=float, default=2e-4)     # (h/Mpc)^3
+    ap.add_argument('--ndens', type=float, default=1.5e-4)   # (h/Mpc)^3
     ap.add_argument('--boxsize', type=float, default=1000.0) # Mpc/h
     ap.add_argument('--out', required=True)
     ap.add_argument('--seed', type=int, default=0)
