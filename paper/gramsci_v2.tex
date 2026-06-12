@@ -7,6 +7,8 @@
 \documentclass[twocolumn]{aastex701}
 
 \usepackage{amsmath}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
 \usepackage{listings}
 \usepackage{xcolor}
 \lstset{
@@ -223,10 +225,61 @@ signed volume
   V = (\mathbf{r}_{ij_1} \times \mathbf{r}_{ij_2}) \cdot \mathbf{r}_{ij_3}.
   \label{eq:volume}
 \end{equation}
-The direction of each spoke is also quantised into a pixel on the unit
+Figure~\ref{fig:chirality} illustrates the underlying geometry: a
+tetrahedron of galaxies is the smallest configuration with a handedness,
+and its mirror image cannot be rotated back onto the original.  The sign
+of $V$ distinguishes the two.  The direction of each spoke is also
+quantised into a pixel on the unit
 sphere (stored as a single byte per edge at graph-construction time with
 ${\sim}17\%$ memory overhead), enabling efficient grouping by parity at
 query time without retaining the original coordinates.
+
+\begin{figure}
+\centering
+\begin{tikzpicture}[scale=0.82,
+  gal/.style={circle, fill=black, inner sep=1.5pt},
+  spoke/.style={-{Stealth[length=1.8mm]}, semithick},
+  far/.style={gray!70, thin}]
+  %% ---- left-handed tetrahedron: V > 0 ----
+  \node[gal, label={[label distance=0pt]below left:$i$}]   (i)  at (0.0, 0.0)  {};
+  \node[gal, label={[label distance=0pt]right:$j_1$}]      (j1) at (2.05, 0.35) {};
+  \node[gal, label={[label distance=0pt]above:$j_2$}]      (j2) at (0.75, 1.80) {};
+  \node[gal, label={[label distance=0pt]below:$j_3$}]      (j3) at (1.25, -0.95) {};
+  \draw[far] (j1) -- (j2);
+  \draw[far] (j2) -- (j3);
+  \draw[far] (j1) -- (j3);
+  \draw[spoke] (i) -- (j1) node[midway, below=0.5pt, font=\scriptsize] {$\mathbf{r}_1$};
+  \draw[spoke] (i) -- (j2) node[midway, left=0.5pt,  font=\scriptsize] {$\mathbf{r}_2$};
+  \draw[spoke] (i) -- (j3) node[midway, left=0.5pt,  font=\scriptsize] {$\mathbf{r}_3$};
+  \node[font=\small] at (1.05, -1.85)
+    {$V = (\mathbf{r}_1\!\times\!\mathbf{r}_2)\cdot\mathbf{r}_3 > 0$};
+  %% ---- mirror plane ----
+  \draw[dash dot, gray] (3.3, -2.15) -- (3.3, 2.25);
+  \node[gray, font=\scriptsize, rotate=90] at (3.55, 0.05) {mirror plane};
+  %% ---- right-handed mirror image: V < 0 ----
+  \node[gal, label={[label distance=0pt]below right:$i$}]  (mi)  at (6.6, 0.0)  {};
+  \node[gal, label={[label distance=0pt]left:$j_1$}]       (mj1) at (4.55, 0.35) {};
+  \node[gal, label={[label distance=0pt]above:$j_2$}]      (mj2) at (5.85, 1.80) {};
+  \node[gal, label={[label distance=0pt]below:$j_3$}]      (mj3) at (5.35, -0.95) {};
+  \draw[far] (mj1) -- (mj2);
+  \draw[far] (mj2) -- (mj3);
+  \draw[far] (mj1) -- (mj3);
+  \draw[spoke] (mi) -- (mj1) node[midway, below=0.5pt, font=\scriptsize] {$\mathbf{r}_1$};
+  \draw[spoke] (mi) -- (mj2) node[midway, right=0.5pt, font=\scriptsize] {$\mathbf{r}_2$};
+  \draw[spoke] (mi) -- (mj3) node[midway, right=0.5pt, font=\scriptsize] {$\mathbf{r}_3$};
+  \node[font=\small] at (5.55, -1.85)
+    {$V = (\mathbf{r}_1\!\times\!\mathbf{r}_2)\cdot\mathbf{r}_3 < 0$};
+\end{tikzpicture}
+\caption{Chirality of a galaxy 4-tuple.  A tetrahedron $(i, j_1, j_2,
+j_3)$ is the smallest configuration of points with a handedness, fixed by
+the sign of the signed volume $V$ (Equation~\ref{eq:volume}).  Its mirror
+image (right) has identical pair separations --- the same six edge bins ---
+but opposite $V$, and no rotation maps one onto the other.  GRAMSCI
+accumulates the two handednesses with opposite signs in the parity-odd
+channel $\zeta^{-}$, which therefore vanishes for any parity-symmetric
+field.
+\label{fig:chirality}}
+\end{figure}
 
 Tetrahedra whose pixelised direction vectors give a mathematically zero
 signed volume (repeated pixels, coplanar pixel triples) have no defined
