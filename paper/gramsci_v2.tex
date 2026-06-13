@@ -923,10 +923,65 @@ We have presented four additions to GRAMSCI:
 
 The code is publicly available at \url{https://github.com/csabiu/Gramsci}.
 
-\vspace{5mm}
+\begin{acknowledgments}
+CGS \todo{author funding/grant support to be inserted}.
 
-\software{GRAMSCI \citep{sabiu19}; \textsc{kdtree2} \citep{kennel04};
-  NumPy \citep{harris20}; NVIDIA HPC SDK.}
+This research used data obtained with the Dark Energy Spectroscopic
+Instrument (DESI).  DESI construction and operations is managed by the
+Lawrence Berkeley National Laboratory.  This material is based upon work
+supported by the U.S.\ Department of Energy, Office of Science, Office of
+High-Energy Physics, under Contract No.\ DE--AC02--05CH11231, and by the
+National Energy Research Scientific Computing Center, a DOE Office of
+Science User Facility under the same contract.  Additional support for
+DESI was provided by the U.S.\ National Science Foundation (NSF), Division
+of Astronomical Sciences under Contract No.\ AST-0950945 to the NSF's
+National Optical-Infrared Astronomy Research Laboratory; the Science and
+Technology Facilities Council of the United Kingdom; the Gordon and Betty
+Moore Foundation; the Heising-Simons Foundation; the French Alternative
+Energies and Atomic Energy Commission (CEA); the National Council of
+Humanities, Science and Technology of Mexico (CONAHCYT); the Ministry of
+Science, Innovation and Universities of Spain
+(MICIU/AEI/10.13039/501100011033), and by the DESI Member Institutions:
+\url{https://www.desi.lbl.gov/collaborating-institutions}.  Any opinions,
+findings, and conclusions or recommendations expressed in this material
+are those of the author(s) and do not necessarily reflect the views of the
+U.S.\ National Science Foundation, the U.S.\ Department of Energy, or any
+of the listed funding agencies.
+
+This work also uses data from the Quijote simulations
+\citep{villaescusa20}; we thank the Quijote team for making the halo
+catalogues publicly available.  The DESI DR1 EZmock catalogues used here
+are approximate mock catalogues built on the effective Zel'dovich
+approximation method \citep{chuang15}, produced for the DESI DR1
+large-scale-structure analysis.
+
+The GPU implementation was developed with the NVIDIA HPC
+SDK\footnote{\url{https://developer.nvidia.com/hpc-sdk}} using
+OpenACC\footnote{\url{https://www.openacc.org}} directives.
+\end{acknowledgments}
+
+\facility{} %% omitted: this work uses public data products and a software
+            %% pipeline; there is no observational facility to list.
+
+\software{Astropy \citep{astropy13, astropy18, astropy22},
+          GRAMSCI \citep{sabiu19},
+          \textsc{kdtree2} \citep{kennel04},
+          Matplotlib \citep{hunter07},
+          NumPy \citep{harris20},
+          SciPy \citep{virtanen20}}
+
+\section*{Data Availability}
+
+The data underlying this article are from the first data release (DR1) of
+the Dark Energy Spectroscopic Instrument, specifically the DR1 LRG
+large-scale-structure catalogues and their associated randoms, publicly
+available at \url{https://data.desi.lbl.gov/public/dr1} under the Creative
+Commons Attribution 4.0 International licence and described in the DR1
+overview paper \citep{desidr1}.  The Quijote halo catalogues
+\citep{villaescusa20} are public at
+\url{https://quijote-simulations.readthedocs.io}.  GRAMSCI, together with
+the analysis scripts used to produce the figures, is available at
+\url{https://github.com/csabiu/Gramsci}.
 
 %% ===================================================================
 \appendix
