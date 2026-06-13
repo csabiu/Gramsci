@@ -47,6 +47,78 @@
    "cpu": [
     {
      "threads": 1,
+     "cpu_3pcf": 223.691,
+     "cpu_4pcf": 119.948
+    },
+    {
+     "threads": 2,
+     "cpu_3pcf": 114.987,
+     "cpu_4pcf": 60.52
+    },
+    {
+     "threads": 4,
+     "cpu_3pcf": 58.667,
+     "cpu_4pcf": 30.86
+    },
+    {
+     "threads": 8,
+     "cpu_3pcf": 29.978,
+     "cpu_4pcf": 15.677
+    },
+    {
+     "threads": 16,
+     "cpu_3pcf": 15.062,
+     "cpu_4pcf": 7.945
+    },
+    {
+     "threads": 32,
+     "cpu_3pcf": 7.766,
+     "cpu_4pcf": 4.153
+    },
+    {
+     "threads": 64,
+     "cpu_3pcf": 4.6,
+     "cpu_4pcf": 2.545
+    }
+   ],
+   "gpu_3pcf_rmax70": 2.413,
+   "gpu_4pcf_rmax40": 1.172,
+   "note": "quiescent-node re-run 2026-06-13"
+  },
+  "density": [
+   {
+    "frac": 0.125,
+    "gpu_3pcf": 0.184,
+    "cpu_3pcf": 0.029,
+    "gpu_4pcf": 0.157,
+    "cpu_4pcf": 0.016
+   },
+   {
+    "frac": 0.25,
+    "gpu_3pcf": 0.307,
+    "cpu_3pcf": 0.159,
+    "gpu_4pcf": 0.259,
+    "cpu_4pcf": 0.086
+   },
+   {
+    "frac": 0.5,
+    "gpu_3pcf": 0.823,
+    "cpu_3pcf": 1.187,
+    "gpu_4pcf": 0.617,
+    "cpu_4pcf": 1.039
+   },
+   {
+    "frac": 1.0,
+    "gpu_3pcf": 3.698,
+    "cpu_3pcf": 9.507,
+    "gpu_4pcf": 2.595,
+    "cpu_4pcf": 15.772
+   }
+  ],
+  "threads_shared_original": {
+   "cpu": [
+    {
+     "threads": 1,
      "cpu_3pcf": 220.528,
      "cpu_4pcf": 119.043
     },
@@ -83,36 +155,6 @@
    ],
    "gpu_3pcf_rmax70": 2.283,
    "gpu_4pcf_rmax40": 1.165
-  },
-  "density": [
-   {
-    "frac": 0.125,
-    "gpu_3pcf": 0.184,
-    "cpu_3pcf": 0.029,
-    "gpu_4pcf": 0.157,
-    "cpu_4pcf": 0.016
-   },
-   {
-    "frac": 0.25,
-    "gpu_3pcf": 0.307,
-    "cpu_3pcf": 0.159,
-    "gpu_4pcf": 0.259,
-    "cpu_4pcf": 0.086
-   },
-   {
-    "frac": 0.5,
-    "gpu_3pcf": 0.823,
-    "cpu_3pcf": 1.187,
-    "gpu_4pcf": 0.617,
-    "cpu_4pcf": 1.039
-   },
-   {
-    "frac": 1.0,
-    "gpu_3pcf": 3.698,
-    "cpu_3pcf": 9.507,
-    "gpu_4pcf": 2.595,
-    "cpu_4pcf": 15.772
-   }
-  ]
+  }
  }
 }

@@ -437,11 +437,12 @@ than a dedicated node.  To quantify the resulting timing noise, several
 configurations were measured repeatedly at different times during the
 campaign: CPU timings reproduce to $0.6$--$1.1\%$ and GPU timings to
 ${\lesssim}5\%$, far below the effects reported here.  In addition, the
-headline CPU$\times$64 measurements --- including both endpoints of the
-thread-scaling figure and the v1 lineage anchor --- were re-measured on
-the same node in a quiescent state after the measurement campaigns
-completed, reproducing the stored values to $\le 2.1\%$ and the
-64-thread parallel efficiencies to within one percentage point.
+headline CPU$\times$64 measurements and the v1 lineage anchor were
+re-measured on the same node in a quiescent state after the measurement
+campaigns completed, reproducing the stored values to $\le 2.1\%$; the
+thread-scaling sweep of Figure~\ref{fig:threads} was re-run in full
+under the same quiescent conditions (and is the version shown),
+reproducing the parallel efficiencies exactly.
 
 All benchmarks in this paper compare implementations of the same estimator
 within GRAMSCI --- identical binning, identical outputs, identical hardware
