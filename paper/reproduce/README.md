@@ -25,7 +25,7 @@ Each figure can also be made individually, e.g.
 | Fig. 5 — out-of-core overhead | `fig_benchmarks.py` | `benchmarks.json` |
 | Fig. 6 — parity signal recovery | `fig_parity_recovery.py` | `parity_recovery.json` |
 | Fig. 7 — DESI vs EZmock 3PCF | `fig_desi_ezmock_3pcf.py` | `ezmock_3pcf_slice.csv` |
-| Fig. 8 — DESI vs EZmock 4PCF (+ config-scale key) | `fig_desi_ezmock_4pcf.py` | `ezmock_4pcf_band.csv`, `fourpcf_config_scales.csv` |
+| Fig. 8 — DESI vs EZmock 4PCF | `fig_desi_ezmock_4pcf.py` | `ezmock_4pcf_band.csv` |
 | Fig. 9 — Quijote fiducial 3PCF | `fig_quijote_fiducial.py` | `quijote_fiducial_3pcf.csv` |
 
 The parity null-test statistic quoted in the text
@@ -45,10 +45,6 @@ The parity null-test statistic quoted in the text
   measurements together with the EZmock ensemble mean and scatter,
   combined across Galactic caps. Reduced from the per-realization
   measurement outputs (24 EZmocks for the 3PCF, 25 for the 4PCF).
-- **`fourpcf_config_scales.csv`** — the bin-centre scale of all six
-  tetrahedron edges ($r_{12}\ldots r_{34}$) for each 4PCF configuration,
-  used for the key panel of Fig. 8 (read a vertical stripe to recover a
-  configuration's physical scales). The geometry is data-independent.
 - **`quijote_fiducial_3pcf.csv`** — the 100-realization Quijote fiducial
   3PCF mean and scatter along the equilateral and isoceles cuts.
 

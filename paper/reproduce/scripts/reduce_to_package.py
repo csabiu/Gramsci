@@ -109,17 +109,6 @@ def reduce_4pcf():
         csv.writer(f).writerows(rows)
     print('  ezmock_4pcf_band.csv')
 
-    # Per-configuration 6-edge scales (bin centres, Mpc/h) for the key panel.
-    # Geometry is data-independent, so any 4pcf file gives the same ordering.
-    d = loadtxt_skip(os.path.join(DESI, 'LRG_NGC_zbin1_r65.4pcf'))
-    centers = 0.5 * (d[:, 0:12:2] + d[:, 1:12:2])   # (Nconfig, 6)
-    srows = [['config', 'r12', 'r13', 'r14', 'r23', 'r24', 'r34']]
-    for i, row in enumerate(centers):
-        srows.append([i + 1] + [f'{v:.3f}' for v in row])
-    with open(os.path.join(OUT, 'fourpcf_config_scales.csv'), 'w', newline='') as f:
-        csv.writer(f).writerows(srows)
-    print('  fourpcf_config_scales.csv')
-
 
 # ---------------------------------------------------------------------------
 # Fig 9: Quijote fiducial 3PCF, equilateral + isoceles(48,76) cuts
