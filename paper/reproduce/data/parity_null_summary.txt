@@ -1,0 +1,8 @@
+# Quijote fiducial parity-odd 4PCF null test (raw NNNN_odd vs 0)
+n_realizations 66
+n_configs 638
+chi2 698.443
+chi2_per_dof 1.0947
+student_t_expectation 1.0317
+frac_beyond_2sigma 0.0564
+max_abs_z 3.539
