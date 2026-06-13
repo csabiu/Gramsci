@@ -13,3 +13,14 @@ Figure 3 (thread scaling) endpoints:
 Re-measured 64-thread efficiencies: 3PCF 76.1%, 4PCF 72.7% (paper: 76%/74%)
 Verdict: all points <= 2.1% deviation; stored sweeps stand.
 Lineage headline re-confirmed: 1056.5s / 25.6s = 41.3x (v1 CPU -> GPU).
+
+DESI LRG 3PCF CPU x64 reference timings (2026-06-13, quiescent node)
+====================================================================
+  rmax=120 (LRG_NGC.gal + LRG_NGC_sub.ran, 12 bins):
+    graph build 92.1s,  query 1030.3s   |  GPU query 380.5s  ->  2.71x
+  rmax=150 (15 bins, out-of-core on GPU side):
+    graph build 301.2s, query 3717.5s   |  GPU query 1673.9s ->  2.22x
+Correctness CPU x64 vs GPU on the real 9e9-edge graph:
+    rmax=120 (364 cfg): NNN/RRR exact, zeta max_rel 1.4e-7
+    rmax=150 (680 cfg): RRR/zeta exact, NNN max_rel 7.4e-7
+  -> bit-equivalent up to atomic-accumulation rounding; well within RTOL=1e-6.

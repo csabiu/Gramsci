@@ -603,14 +603,17 @@ one-time ${\sim}12\%$ cost saturates rather than growing with $W$.
 3PCF, $\rmax{=}80$    & test (0.7M)    &   9.4 &   3.6 & 2.6$\times$ \\
 4PCF, $\rmax{=}50$    & test (0.7M)    &  15.7 &   2.9 & 5.5$\times$ \\
 4PCF, $\rmax{=}65$    & test (0.7M)    & 146.8 &  16.4 & 9.0$\times$ \\
-3PCF, $\rmax{=}120$   & DESI LRG (3.0M) & \nodata & 380 & \nodata \\
-3PCF, $\rmax{=}150$\tablenotemark{a} & DESI LRG (3.0M) & \nodata & 1674 & \nodata \\
+3PCF, $\rmax{=}120$   & DESI LRG (3.0M) & 1030 & 380 & 2.7$\times$ \\
+3PCF, $\rmax{=}150$\tablenotemark{a} & DESI LRG (3.0M) & 3718 & 1674 & 2.2$\times$ \\
 \enddata
 \tablenotetext{a}{Out-of-core: $9.0\times10^9$ edges (45\,GB CSR) on a
   24\,GB device, $5\times5$ window tiles.}
 \tablecomments{Query time only; graph construction (CPU, OpenMP) adds
-  $\lesssim 10\%$ for the GPU runs. \todo{re-run CPU reference timings for
-  the DESI rows on the 64-thread node for completeness}}
+  $\lesssim 10\%$ for the GPU runs.  The DESI GPU/CPU speedups are smaller
+  than for the test catalogue because the survey graph is dominated by
+  long adjacency lists, where the CPU merge-walk is already
+  cache-efficient; the GPU advantage there comes chiefly from the
+  out-of-core capability rather than raw throughput.}
 \end{deluxetable}
 
 \subsection{Expected performance on other hardware}
@@ -647,6 +650,12 @@ Both implementations are run on the same catalogue and compared bin by
 bin.  All four GPU kernels (3PCF, equilateral 3PCF, 4PCF, parity 4PCF)
 were validated against the CPU reference in both single-pass and chunked
 modes --- eight combinations --- with exact agreement of all binned counts.
+This agreement also holds at production scale: the DESI LRG 3PCF of
+Table~\ref{tab:gpu}, computed on the GPU in chunked mode over
+$9.0\times10^9$ edges (680 binned configurations), reproduces the
+64-thread CPU result to a maximum relative difference of $7\times10^{-7}$
+in the counts --- floating-point rounding from the differing accumulation
+order, not algorithmic disagreement.
 The regression test suite (included in the repository) checks
 isolated-pair 2PCF, regular-tetrahedra connected 4PCF, and
 chiral-tetrahedra parity 4PCF against known analytic values, and
