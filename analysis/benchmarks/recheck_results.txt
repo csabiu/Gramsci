@@ -1,0 +1,15 @@
+Quiescent-node re-verification (2026-06-13, post-campaign idle machine)
+=======================================================================
+Key CPU x64 points (3 repeats unless noted):
+  3PCF rmax=80 CPUx64        stored    9.4s   re-run    9.6s   +1.4%  (spread 1.1%)
+  4PCF rmax=65 CPUx64        stored  149.7s   re-run  149.2s   +0.3%  (spread 0.9%)
+  4PCF rmax=70 CPUx64        stored  279.6s   re-run  282.9s   +1.2%  (spread 0.2%, 2 repeats)
+  v1 4PCF rmax=70 CPUx64     stored 1043.6s   re-run 1056.5s   +1.2%  (1 repeat)
+Figure 3 (thread scaling) endpoints:
+  3PCF rmax=70 x64           stored    4.54s  re-run    4.62s  +1.8%
+  4PCF rmax=40 x64           stored    2.50s  re-run    2.55s  +2.1%
+  3PCF rmax=70 x1            stored  220.5s   re-run  225.1s   +2.1%
+  4PCF rmax=40 x1            stored  119.0s   re-run  118.7s   +0.3%
+Re-measured 64-thread efficiencies: 3PCF 76.1%, 4PCF 72.7% (paper: 76%/74%)
+Verdict: all points <= 2.1% deviation; stored sweeps stand.
+Lineage headline re-confirmed: 1056.5s / 25.6s = 41.3x (v1 CPU -> GPU).
