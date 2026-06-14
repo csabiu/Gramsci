@@ -743,30 +743,34 @@ independently.
 \label{sec:desi3pcf}
 
 Figure~\ref{fig:desimock3} compares the full DESI 3PCF against the EZmock
-ensemble across all $220$ binned triangle configurations
-($50 < r < 150\Mpch$, 10$\Mpch$ bins), with NGC, SGC, and both redshift
-bins combined at the count level ($S^3$ effective-volume weighting,
-rebinned exactly from the native 5$\Mpch$ measurement).  The top panel
-shows $\zeta$ on a symmetric-log axis, which spans the hierarchical
-decay from the small-scale configurations (left) to the near-zero
-large-scale configurations (right); the middle panel shows the residual
-$\zeta_{\rm DESI} - \bar\zeta_{\rm mock}$ against the mock scatter; and
-the bottom panel keys the configuration axis to physical scale.  Because
-a triangle is specified by three side lengths, this key is three lines:
-the sorted side-length bins $r_1 \le r_2 \le r_3$ of each configuration,
-whose nested staircase reflects the lexicographic ordering of the
-configurations.  Across the $213$ well-measured configurations the data
-track the ensemble with $\chi^2/{\rm dof} = 1.4$ (diagonal errors; the
-off-diagonal configuration covariance, not included here, would reduce
-this), confirming that the configuration-space three-point signal of the
-LRG sample is consistent with the $\Lambda$CDM-calibrated mocks across the
-full triangle space.
+ensemble across all $207$ binned triangle configurations
+($50 < r < 150\Mpch$, 10$\Mpch$ bins) that satisfy the triangle
+inequality $r_1 + r_2 > r_3$ on the bin centres --- the canonical
+enumeration also produces geometrically impossible combinations such as
+$(55, 55, 145)\Mpch$, which carry zero counts and are excluded.  NGC, SGC,
+and both redshift bins are combined at the count level ($S^3$
+effective-volume weighting, rebinned exactly from the native 5$\Mpch$
+measurement).  The top panel shows $\zeta$ on a symmetric-log axis, which
+spans the hierarchical decay from the small-scale configurations (left)
+to the near-zero large-scale configurations (right); the middle panel
+shows the residual $\zeta_{\rm DESI} - \bar\zeta_{\rm mock}$ against the
+mock scatter; and the bottom panel keys the configuration axis to
+physical scale.  Because a triangle is specified by three side lengths,
+this key is three lines: the sorted side-length bins
+$r_1 \le r_2 \le r_3$ of each configuration, whose nested staircase
+reflects the lexicographic ordering of the configurations.  The data
+track the ensemble with $\chi^2/{\rm dof} = 1.5$ (207 configurations,
+diagonal errors; the off-diagonal configuration covariance, not included
+here, would reduce this), confirming that the configuration-space
+three-point signal of the LRG sample is consistent with the
+$\Lambda$CDM-calibrated mocks across the full triangle space.
 
 \begin{figure*}
 \centering
 \includegraphics[width=\textwidth]{figures/desi_vs_ezmock_3pcf.pdf}
-\caption{DESI DR1 LRG 3PCF versus the EZmock ensemble over all $220$
-triangle configurations ($50 < r < 150\Mpch$, 10$\Mpch$ bins; NGC, SGC,
+\caption{DESI DR1 LRG 3PCF versus the EZmock ensemble over all $207$
+triangle configurations satisfying $r_1 + r_2 > r_3$
+($50 < r < 150\Mpch$, 10$\Mpch$ bins; NGC, SGC,
 and both redshift bins combined at the count level in data and mocks).
 \textit{Top:} $\zeta$ (symlog axis), DESI points over the mock mean
 $\pm 1\sigma$ band (24 realisations).  \textit{Middle:} the residual

@@ -81,24 +81,37 @@ def reduce_3pcf():
     mean = np.where(good, np.nanmean(safe, axis=0), np.nan)
     sig = np.where(good, np.nanstd(safe, axis=0, ddof=1), 0.0)
 
-    with open(os.path.join(OUT, 'ezmock_3pcf_allconfig.csv'), 'w', newline='') as f:
-        w = csv.writer(f)
-        w.writerow(['config', 'desi', 'mock_mean', 'mock_sigma', 'valid'])
-        for i in range(len(mean)):
-            w.writerow([i + 1, f'{zdesi[i]:.8e}',
-                        f'{mean[i]:.8e}' if np.isfinite(mean[i]) else 'nan',
-                        f'{sig[i]:.8e}', int(good[i])])
-
+    # Keep only configurations that form a genuine triangle: the bin-centre
+    # side lengths must satisfy the triangle inequality r1 + r2 > r3 (with
+    # r3 the largest, since the canonical tuple is sorted).  The enumeration
+    # includes geometrically impossible combinations such as (55, 55, 145),
+    # which have zero counts; we drop them so every plotted configuration is
+    # a real triangle.  Configurations are renumbered 1..N over the kept set.
     r1c = 0.5 * (ec[:, 0] + ec[:, 1])
     r2c = 0.5 * (ec[:, 2] + ec[:, 3])
     r3c = 0.5 * (ec[:, 4] + ec[:, 5])
+    tri = (r1c + r2c) > r3c
+    ndrop = int((~tri).sum())
+
+    with open(os.path.join(OUT, 'ezmock_3pcf_allconfig.csv'), 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['config', 'desi', 'mock_mean', 'mock_sigma', 'valid'])
+        c = 0
+        for i in np.where(tri)[0]:
+            c += 1
+            w.writerow([c, f'{zdesi[i]:.8e}',
+                        f'{mean[i]:.8e}' if np.isfinite(mean[i]) else 'nan',
+                        f'{sig[i]:.8e}', int(good[i])])
+
     with open(os.path.join(OUT, 'threepcf_config_scales.csv'), 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(['config', 'r1', 'r2', 'r3'])
-        for i in range(len(r1c)):
-            w.writerow([i + 1, f'{r1c[i]:.3f}', f'{r2c[i]:.3f}', f'{r3c[i]:.3f}'])
+        c = 0
+        for i in np.where(tri)[0]:
+            c += 1
+            w.writerow([c, f'{r1c[i]:.3f}', f'{r2c[i]:.3f}', f'{r3c[i]:.3f}'])
     print(f'  ezmock_3pcf_allconfig.csv + threepcf_config_scales.csv  '
-          f'(nmock={nm}, nconfig={len(mean)})')
+          f'(nmock={nm}, nconfig={int(tri.sum())}, dropped {ndrop} non-triangles)')
 
 
 # ---------------------------------------------------------------------------
