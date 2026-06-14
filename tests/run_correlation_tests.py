@@ -257,12 +257,17 @@ def main():
     zeta_col = tmp4[:, 14]      # zeta = N4/R4
     zeta_disc = tmp4[:, 15]     # zeta_disc
     zeta_conn = tmp4[:, 16]     # zeta_conn
-    # Check zeta_conn = (zeta - 1) - zeta_disc for rows where zeta != 0
+    # Check zeta_conn = zeta - zeta_disc for rows where zeta != 0
+    # (zeta = N4/R4 is the total 4PCF under signed weights; no "-1").
+    # Tolerance scales with the inputs because the columns are written at
+    # e14.7 precision, so reconstructing the identity from the rounded zeta
+    # and zeta_disc columns carries ~1e-7*(|zeta|+|zeta_disc|) rounding.
     mask = zeta_col != 0.0
     if np.any(mask):
-        expected_conn = (zeta_col[mask] - 1.0) - zeta_disc[mask]
-        assert np.allclose(zeta_conn[mask], expected_conn, atol=1e-20), \
-            f'4pcf disconnected identity failed: zeta_conn != (zeta-1) - zeta_disc'
+        expected_conn = zeta_col[mask] - zeta_disc[mask]
+        tol = 1e-6 * (np.abs(zeta_col[mask]) + np.abs(zeta_disc[mask])) + 1e-9
+        assert np.all(np.abs(zeta_conn[mask] - expected_conn) <= tol), \
+            f'4pcf disconnected identity failed: zeta_conn != zeta - zeta_disc'
 
     # 4PCF parity smoke test
     out4p = 'tmp_4pcfp.out'
@@ -285,11 +290,13 @@ def main():
     zeta_disc_p = tmp4p[:, 18]     # zeta_disc
     zeta_conn_even = tmp4p[:, 19]  # zeta_conn_even
     zeta_conn_odd = tmp4p[:, 20]   # zeta_conn_odd
-    # Check even: zeta_conn_even = (zeta_even - 1) - zeta_disc
+    # Check even: zeta_conn_even = zeta_even - zeta_disc (no "-1");
+    # precision-scaled tolerance for the e14.7-rounded columns (see 4pcf above).
     mask = zeta_even != 0.0
     if np.any(mask):
-        expected_even = (zeta_even[mask] - 1.0) - zeta_disc_p[mask]
-        assert np.allclose(zeta_conn_even[mask], expected_even, atol=1e-20), \
+        expected_even = zeta_even[mask] - zeta_disc_p[mask]
+        tol = 1e-6 * (np.abs(zeta_even[mask]) + np.abs(zeta_disc_p[mask])) + 1e-9
+        assert np.all(np.abs(zeta_conn_even[mask] - expected_even) <= tol), \
             f'4pcfp even disconnected identity failed'
     # Check odd: zeta_conn_odd = zeta_odd (disconnected is zero for odd)
     assert np.allclose(zeta_conn_odd, zeta_odd, atol=1e-20), \
