@@ -1,38 +1,74 @@
-"""Figure 8: DESI DR1 LRG 4PCF vs the EZmock ensemble, all configurations.
-Reads ../data/ezmock_4pcf_band.csv; writes ../figures/desi_vs_ezmock_4pcf.{pdf,png}.
+"""Figure 8: DESI DR1 LRG 4PCF vs the EZmock ensemble, all configurations,
+NGC+SGC and both redshift bins combined at the count level.
+
+Top:    full 4PCF zeta = N4/R4 (connected + disconnected), symlog axis.
+Middle: connected 4PCF zeta_conn = zeta - zeta_disc, symlog axis.
+Bottom: the connected residual zeta_conn(DESI) - mean(zeta_conn,mock) with
+        the +/-1 sigma mock band.
+
+Reads ../data/ezmock_4pcf_allcomb.csv; writes
+../figures/desi_vs_ezmock_4pcf.{pdf,png}.  Style matches the 3PCF figure.
 """
 import csv
 
 import numpy as np
 from _style import datafile, save, plt
 
-rows = list(csv.DictReader(open(datafile('ezmock_4pcf_band.csv'))))
-zbins = {1: [], 2: []}
-for r in rows:
-    mean = float(r['mock_mean']) if r['mock_mean'] != 'nan' else np.nan
-    zbins[int(r['zbin'])].append(
-        (int(r['config']), float(r['desi']), mean,
-         float(r['mock_sigma']), int(r['valid'])))
+rows = list(csv.DictReader(open(datafile('ezmock_4pcf_allcomb.csv'))))
+idx = np.array([int(r['config']) for r in rows])
+good = np.array([int(r['valid']) for r in rows]).astype(bool)
 
-fig, axes = plt.subplots(2, 1, figsize=(7.0, 4.6), sharex=True)
-titles = {1: r'$0.4 < z \leq 0.8$', 2: r'$0.8 < z \leq 1.1$'}
-for ax, zbin in zip(axes, (1, 2)):
-    a = np.array(zbins[zbin], dtype=float)
-    idx, desi, mean, sig, good = a[:, 0], a[:, 1], a[:, 2], a[:, 3], a[:, 4].astype(bool)
+
+def col(name):
+    a = np.array([float(r[name]) if r[name] != 'nan' else np.nan for r in rows])
+    a[~good] = np.nan          # invalid configs -> gaps in every panel
+    return a
+
+
+df, fm, fs = col('desi_full'), col('full_mean'), col('full_sig')
+dc, cm, cs = col('desi_conn'), col('conn_mean'), col('conn_sig')
+nconf = len(idx)
+
+fig = plt.figure(figsize=(7.0, 5.4))
+gs = fig.add_gridspec(3, 1, height_ratios=[3, 3, 2], hspace=0.13,
+                      left=0.115, right=0.975, top=0.975, bottom=0.085)
+ax0 = fig.add_subplot(gs[0])
+ax1 = fig.add_subplot(gs[1], sharex=ax0)
+ax2 = fig.add_subplot(gs[2], sharex=ax0)
+
+
+def band_panel(ax, desi, mean, sig, ylabel, label, linthresh):
     ax.fill_between(idx, mean - sig, mean + sig, color='C0', alpha=0.3, lw=0,
                     step='mid', label='EZmock mean $\\pm 1\\sigma$ (25 mocks)')
     ax.plot(idx, mean, '-', color='C0', lw=0.7, drawstyle='steps-mid')
-    ax.plot(idx, desi, 'k.', ms=2.5, label='DESI DR1 LRG')
+    ax.plot(idx, desi, 'k.', ms=3, label='DESI DR1 LRG')
     ax.axhline(0, color='gray', lw=0.5, alpha=0.6)
-    ax.set_ylabel(r'$\zeta^{(4)}$')
-    ax.text(0.985, 0.92, titles[zbin], transform=ax.transAxes, ha='right',
-            va='top', fontsize=9)
-    m = good & np.isfinite(desi) & (np.abs(desi) < 1.0) & (sig > 0)
-    chi2 = float(np.nansum(((desi - mean)[m] / sig[m])**2))
-    print(f'  zbin{zbin}: chi2/dof = {chi2:.1f}/{int(m.sum())} = {chi2/m.sum():.2f}')
-    lo = np.nanpercentile(mean - 3*sig, 2); hi = np.nanpercentile(mean + 3*sig, 98)
-    ax.set_ylim(lo, hi)
-axes[0].legend(loc='lower left', frameon=False, ncol=2)
-axes[1].set_xlabel('configuration index')
-plt.tight_layout()
+    ax.set_yscale('symlog', linthresh=linthresh)
+    ax.set_ylabel(ylabel)
+    ax.text(0.985, 0.9, label, transform=ax.transAxes, ha='right', va='top',
+            fontsize=9)
+    ax.set_xlim(0.5, nconf + 0.5)
+
+
+band_panel(ax0, df, fm, fs, r'$\zeta^{(4)}$', 'full', 1e-3)
+ax0.tick_params(labelbottom=False)
+ax0.legend(loc='lower right', frameon=False)
+
+band_panel(ax1, dc, cm, cs, r'$\zeta^{(4)}_{\rm conn}$', 'connected', 3e-4)
+ax1.tick_params(labelbottom=False)
+
+# residual of the connected 4PCF
+diff = dc - cm
+ax2.fill_between(idx, -cs, cs, color='gray', alpha=0.25, lw=0, step='mid',
+                 label=r'$\pm 1\sigma$ (mocks)')
+ax2.plot(idx, diff, 'k.', ms=3)
+ax2.axhline(0, color='gray', lw=0.5, alpha=0.6)
+ax2.set_ylabel(r'$\zeta^{(4)}_{\rm conn}$ residual')
+ax2.set_xlabel('configuration index')
+m = good & np.isfinite(diff) & (cs > 0)
+ax2.set_ylim(-3 * np.nanmedian(cs[m]), 3 * np.nanmedian(cs[m]))
+ax2.legend(loc='upper right', frameon=False)
+
+chi2 = float(np.sum((diff[m] / cs[m])**2))
+print(f'  connected chi2/dof = {chi2:.1f}/{int(m.sum())} = {chi2 / m.sum():.2f}')
 save(fig, 'desi_vs_ezmock_4pcf')

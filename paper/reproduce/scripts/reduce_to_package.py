@@ -115,42 +115,174 @@ def reduce_3pcf():
 
 
 # ---------------------------------------------------------------------------
-# Fig 8: DESI 4PCF vs EZmock, all 276 configs (S^4 weights, validity mask)
+# Fig 8: DESI CONNECTED 4PCF vs EZmock, per redshift bin (NGC+SGC combined).
+#
+# zeta_conn = zeta_total - zeta_disc, where
+#   zeta_total = (S_N^4 N4_N + S_S^4 N4_S)/(S_N^4 R4_N + S_S^4 R4_S)   (cols 12,13)
+#   zeta_disc(config) = xi(b1)xi(b6) + xi(b2)xi(b5) + xi(b3)xi(b4)
+# with xi the (count-level S^2-combined) internal 2PCF.  The internal 2PCF is
+# read from the run logs and corrected for the historical "-1" estimator bug
+# (xi_correct = xi_logged + 1; the bug was exactly the spurious -1, now fixed
+# in the Fortran).  xi_NGC ~ xi_SGC to a few percent, so the S^2-weighted cap
+# average of xi is an excellent stand-in for the count-level combined 2PCF
+# (the residual error in zeta_disc is second order in xi_N - xi_S).
+# This reconstruction was validated bin-for-bin against the fixed binary's
+# zeta_conn column.
 # ---------------------------------------------------------------------------
+S_DESI_4PCF = {('NGC', 1): 1.798173e5, ('NGC', 2): 1.754226e5,
+               ('SGC', 1): 9.207662e4, ('SGC', 2): 8.807297e4}
+RMIN4, RMAX4, NB4 = 20.0, 65.0, 4
+
+
+def _parse_internal_xi(logpath):
+    """Return the corrected internal 2PCF (xi_logged + 1) from a 4pcf run log."""
+    xi = []
+    with open(logpath) as f:
+        block = False
+        for line in f:
+            if 'Internal 2PCF computed' in line:
+                block = True
+                continue
+            if block:
+                m = re.search(r'xi =\s*(\S+)', line)
+                if m:
+                    xi.append(float(m.group(1)) + 1.0)   # undo the historical -1
+                elif xi:
+                    break
+    return np.array(xi)
+
+
+SUBSAMPLES = [('NGC', 1), ('NGC', 2), ('SGC', 1), ('SGC', 2)]
+
+
+def _tetrahedron_mask():
+    """True for configurations whose six bin-centre edge lengths form a real
+    tetrahedron (Cayley-Menger determinant > 0).  The canonical enumeration
+    includes 6-tuples that satisfy every face triangle inequality yet are not
+    embeddable in 3D (e.g. five edges of 26 and one of 48); these are dropped
+    so every plotted configuration is a genuine tetrahedron, mirroring the
+    triangle-inequality cut applied to the 3PCF.  Geometry is data-independent.
+    """
+    d = loadtxt_skip(os.path.join(DESI, 'LRG_NGC_zbin1_r65.4pcf'))
+    c = 0.5 * (d[:, 0:12:2] + d[:, 1:12:2])     # d12,d13,d14,d23,d24,d34
+    mask = np.zeros(len(c), bool)
+    for i, e in enumerate(c):
+        d12, d13, d14, d23, d24, d34 = e**2
+        M = np.array([[0, 1, 1, 1, 1],
+                      [1, 0, d12, d13, d14],
+                      [1, d12, 0, d23, d24],
+                      [1, d13, d23, 0, d34],
+                      [1, d14, d24, d34, 0]], float)
+        mask[i] = np.linalg.det(M) > 0
+    return mask
+
+
+def _full_and_conn(file_for, log_for, S_for):
+    """Full and connected 4PCF for ALL sub-samples combined (NGC+SGC, both
+    redshift bins) at the count level.  Returns (ztot, zconn) arrays over
+    configs, or (None, None) if inputs are missing.
+
+    ztot = (sum S^4 N4) / (sum S^4 R4)                 [count-level total]
+    zconn = ztot - zdisc,  zdisc from the S^2-combined internal 2PCF.
+    """
+    files = [file_for(c, z) for c, z in SUBSAMPLES]
+    logs = [log_for(c, z) for c, z in SUBSAMPLES]
+    if not all(os.path.exists(p) for p in files + logs):
+        return None, None
+    n4 = r4 = None
+    xi_num = xi_den = None
+    edges = None
+    for (c, z), fp, lp in zip(SUBSAMPLES, files, logs):
+        d = loadtxt_skip(fp)
+        edges = d[:, 0:12:2]
+        S = S_for(c, z)
+        n4 = S**4 * d[:, 12] if n4 is None else n4 + S**4 * d[:, 12]
+        r4 = S**4 * d[:, 13] if r4 is None else r4 + S**4 * d[:, 13]
+        xi = _parse_internal_xi(lp)
+        if xi.size != NB4:
+            return None, None
+        xi_num = S**2 * xi if xi_num is None else xi_num + S**2 * xi
+        xi_den = S**2 if xi_den is None else xi_den + S**2
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ztot = n4 / r4
+    xi_all = xi_num / xi_den
+    b = np.clip(np.rint((edges - RMIN4) / ((RMAX4 - RMIN4) / NB4)).astype(int),
+                0, NB4 - 1)
+    zdisc = (xi_all[b[:, 0]] * xi_all[b[:, 5]] + xi_all[b[:, 1]] * xi_all[b[:, 4]]
+             + xi_all[b[:, 2]] * xi_all[b[:, 3]])
+    return ztot, ztot - zdisc
+
+
 def reduce_4pcf():
-    import compare_desi_ezmock_4pcf as c4
-    msums = c4.load_mock_sums()
     mock_ids = sorted({int(re.search(r'mock(\d+)', f).group(1))
                        for f in glob.glob(os.path.join(EZ, 'NGC_zbin1_mock*.4pcf'))})
-    rows = [['zbin', 'config', 'desi', 'mock_mean', 'mock_sigma', 'valid']]
-    for zbin in (1, 2):
-        stack = []
-        for n in mock_ids:
-            fn = [os.path.join(EZ, f'{c}_zbin{zbin}_mock{n}.4pcf') for c in ('NGC', 'SGC')]
-            if not all(os.path.exists(x) for x in fn):
-                continue
-            try:
-                wN = msums[('NGC', n, zbin)]**4
-                wS = msums[('SGC', n, zbin)]**4
-            except KeyError:
-                continue
-            stack.append(c4.combine(c4.load(fn[0]), c4.load(fn[1]), wN, wS))
-        stack = np.array(stack)
-        good = np.all(np.isfinite(stack) & (np.abs(stack) < 1.0), axis=0)
-        stack = np.where(good[None, :], stack, np.nan)
-        mean = np.nanmean(stack, axis=0)
-        sig = np.nanstd(stack, axis=0, ddof=1)
-        sig[~good] = 0.0
-        ngc = c4.load(os.path.join(DESI, f'LRG_NGC_zbin{zbin}_r65.4pcf'))
-        sgc = c4.load(os.path.join(DESI, f'LRG_SGC_zbin{zbin}_r65.4pcf'))
-        zd = c4.combine(ngc, sgc, c4.S_DESI[('NGC', zbin)]**4, c4.S_DESI[('SGC', zbin)]**4)
-        for i in range(len(mean)):
-            rows.append([zbin, i + 1, f'{zd[i]:.8e}',
-                         f'{mean[i]:.8e}' if np.isfinite(mean[i]) else 'nan',
-                         f'{sig[i]:.8e}', int(good[i])])
-    with open(os.path.join(OUT, 'ezmock_4pcf_band.csv'), 'w', newline='') as f:
+
+    # DESI: full and connected, all four sub-samples combined
+    desi_full, desi_conn = _full_and_conn(
+        lambda c, z: os.path.join(DESI, f'LRG_{c}_zbin{z}_r65.4pcf'),
+        lambda c, z: os.path.join(DESI, f'LRG_{c}_zbin{z}_r65.4pcf.log'),
+        lambda c, z: S_DESI_4PCF[(c, z)])
+
+    # mock ensemble
+    full_stack, conn_stack = [], []
+    for n in mock_ids:
+        ft, cn = _full_and_conn(
+            lambda c, z, n=n: os.path.join(EZ, f'{c}_zbin{z}_mock{n}.4pcf'),
+            lambda c, z, n=n: os.path.join(EZ, f'{c}_zbin{z}_mock{n}.4pcf.log'),
+            lambda c, z, n=n: _msum(c, n, z))
+        if ft is not None:
+            full_stack.append(ft); conn_stack.append(cn)
+    full_stack = np.array(full_stack)
+    conn_stack = np.array(conn_stack)
+    nm = full_stack.shape[0]
+
+    def stats(stack, desi):
+        good = np.all(np.isfinite(stack) & (np.abs(stack) < 1e3), axis=0) \
+            & np.isfinite(desi) & (np.abs(desi) < 1e3)
+        safe = np.where(good[None, :], stack, np.nan)
+        return (np.where(good, np.nanmean(safe, axis=0), np.nan),
+                np.where(good, np.nanstd(safe, axis=0, ddof=1), 0.0), good)
+
+    fmean, fsig, fgood = stats(full_stack, desi_full)
+    cmean, csig, cgood = stats(conn_stack, desi_conn)
+    # Keep only genuine tetrahedra (Cayley-Menger) that are also well-measured;
+    # renumber 1..N over the kept set so the configuration axis has no gaps.
+    keep = _tetrahedron_mask() & fgood & cgood
+    ndrop = int((~keep).sum())
+
+    rows = [['config', 'desi_full', 'full_mean', 'full_sig',
+             'desi_conn', 'conn_mean', 'conn_sig', 'valid']]
+    c = 0
+    for i in np.where(keep)[0]:
+        c += 1
+        rows.append([c,
+                     f'{desi_full[i]:.8e}',
+                     f'{fmean[i]:.8e}' if np.isfinite(fmean[i]) else 'nan',
+                     f'{fsig[i]:.8e}',
+                     f'{desi_conn[i]:.8e}',
+                     f'{cmean[i]:.8e}' if np.isfinite(cmean[i]) else 'nan',
+                     f'{csig[i]:.8e}', 1])
+    with open(os.path.join(OUT, 'ezmock_4pcf_allcomb.csv'), 'w', newline='') as f:
         csv.writer(f).writerows(rows)
-    print('  ezmock_4pcf_band.csv')
+    print(f'  ezmock_4pcf_allcomb.csv (full + connected, all combined, '
+          f'{int(keep.sum())} tetrahedra, dropped {ndrop} non-tetrahedra/'
+          f'invalid; {nm} mocks)')
+
+
+# mock weight sums for the 4PCF (zbin_sums_4pcf.txt)
+_MSUMS = None
+
+
+def _msum(cap, n, zbin):
+    global _MSUMS
+    if _MSUMS is None:
+        _MSUMS = {}
+        with open(os.path.join(EZ, 'zbin_sums_4pcf.txt')) as f:
+            for line in f:
+                label, zb, ngal, sw = line.split()
+                c, mk = label.split('_mock')
+                _MSUMS[(c, int(mk), int(zb[-1]))] = float(sw)
+    return _MSUMS[(cap, n, zbin)]
 
 
 # ---------------------------------------------------------------------------

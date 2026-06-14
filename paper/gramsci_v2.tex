@@ -62,11 +62,11 @@ scheme allows graphs far exceeding device memory --- we measure a
 $9\times10^9$-edge BAO-scale 3PCF on a 24\,GB card with ${\sim}20\%$
 overhead.  We validate the code against its CPU reference, against analytic
 injection tests, and on Quijote $N$-body simulations, and demonstrate
-BAO-scale applications on the DESI DR1 LRG sample: the 3PCF and connected
-4PCF are measured in two redshift bins and compared against the EZmock
-ensemble, with the acoustic feature visible in the three-point function
-and reproduced by the mocks.  The code is available at
-\url{https://github.com/csabiu/Gramsci}.
+BAO-scale applications on the DESI DR1 LRG sample: the 3PCF and the full
+and connected 4PCF are measured across the full configuration space and
+compared against the EZmock ensemble, with the acoustic feature visible in
+the three-point function and the connected 4PCF consistent with the mocks.
+The code is available at \url{https://github.com/csabiu/Gramsci}.
 \end{abstract}
 
 \keywords{cosmology: large-scale structure --- methods: statistical ---
@@ -786,18 +786,33 @@ configurations.
 \subsection{4PCF versus the mock ensemble}
 \label{sec:desi4pcf}
 
-Figure~\ref{fig:desimock4} extends the comparison to the 4PCF: all 276
-configurations with $20 < r < 65\Mpch$ in 4 radial bins, for the same
-two redshift bins and the same 25 mocks (cap combination now with the
-fourth power of the summed weights).  The data track the mock ensemble
-across the full configuration space, with diagonal
-$\chi^2/{\rm dof} = 1.22$ ($0.4 < z \le 0.8$, 267 valid
-configurations) and $0.57$ ($0.8 < z \le 1.1$, 265); with 25 mocks the
-per-configuration scatter estimates are themselves uncertain at the
-${\sim}15\%$ level and the heavy-tailed sparse configurations widen the
-expected range of the diagonal statistic, so both values indicate
-consistency.  Configurations whose random quadruplet counts vanish in
-any single mock are excluded (9--11 of 276).
+Figure~\ref{fig:desimock4} extends the comparison to the 4PCF, combining
+NGC, SGC, and both redshift bins into a single all-LRG measurement at the
+count level ($S^4$ effective-volume weighting for the four-point counts,
+$S^2$ for the disconnected two-point term).  We show the configurations
+with $20 < r < 65\Mpch$ in 4 radial bins whose six edge-length bins form
+a realisable tetrahedron: the canonical enumeration also produces
+6-tuples that satisfy every face triangle inequality yet are not
+embeddable in three dimensions (for example five edges of $26\Mpch$ and
+one of $48\Mpch$), which we exclude by requiring a positive
+Cayley--Menger determinant on the bin centres, leaving 178 of 276
+configurations.
+
+The top panel shows the full 4PCF
+$\zeta^{(4)} = \mathrm{NNNN}/\mathrm{RRRR}$, which at these scales is
+dominated by the disconnected (Gaussian) contribution --- the sum of
+products of pairwise 2PCFs --- and follows a smooth hierarchical decay.
+The middle panel shows the connected 4PCF
+$\zeta^{(4)}_{\rm conn} = \zeta^{(4)} - \zeta^{(4)}_{\rm disc}$, the
+genuine four-point (trispectrum) signal left after subtracting the
+disconnected term, which GRAMSCI builds from an internally computed 2PCF;
+it is roughly an order of magnitude smaller and changes sign across the
+configuration space.  The bottom panel shows the connected residual
+against the mock scatter.  The data track the ensemble: the connected
+4PCF has diagonal $\chi^2/{\rm dof} = 1.15$ (178 configurations; with 25
+mocks the per-configuration scatter is itself uncertain at the
+${\sim}15\%$ level, and the off-diagonal covariance, not included here,
+would change this), consistent with the $\Lambda$CDM-calibrated mocks.
 
 A practical note on cost: the same measurement at $\rmax = 80\Mpch$
 takes $2.6$\,h for the larger redshift bin of the NGC --- an order of
@@ -814,14 +829,21 @@ survey-data 4PCF work.
 
 \begin{figure*}
 \centering
-\includegraphics[width=0.94\textwidth]{figures/desi_vs_ezmock_4pcf.pdf}
-\caption{DESI DR1 LRG 4PCF ($\zeta^{(4)} = \mathrm{NNNN}/\mathrm{RRRR}$)
-versus the EZmock ensemble over all 276 configurations
-($20 < r < 65\Mpch$, 4 radial bins; canonical configuration ordering),
-for the two redshift bins.  NGC and SGC are combined at the count level
-in both data and mocks; the band is the ensemble mean $\pm 1\sigma$
-over 25 realisations.  Isolated wide bands mark sparse configurations
-with poorly determined mock scatter.
+\includegraphics[width=\textwidth]{figures/desi_vs_ezmock_4pcf.pdf}
+\caption{DESI DR1 LRG 4PCF versus the EZmock ensemble over the 178
+tetrahedral configurations ($20 < r < 65\Mpch$, 4 radial bins; NGC, SGC
+and both redshift bins combined at the count level in data and mocks;
+configurations that do not form a geometric tetrahedron --- by the
+Cayley--Menger criterion on the bin centres --- are excluded).
+\textit{Top:} the full 4PCF $\zeta^{(4)} = \mathrm{NNNN}/\mathrm{RRRR}$
+(symmetric-log axis), dominated by the disconnected Gaussian part.
+\textit{Middle:} the connected 4PCF
+$\zeta^{(4)}_{\rm conn} = \zeta^{(4)} - \zeta^{(4)}_{\rm disc}$ (symlog),
+an order of magnitude smaller and sign-changing.  \textit{Bottom:} the
+connected residual
+$\zeta^{(4)}_{\rm conn}(\mathrm{DESI}) - \langle\zeta^{(4)}_{\rm conn}\rangle_{\rm mock}$
+with the $\pm 1\sigma$ mock band.  Black points are DESI; the blue band
+is the mock ensemble mean $\pm 1\sigma$ (25 realisations).
 \label{fig:desimock4}}
 \end{figure*}
 
