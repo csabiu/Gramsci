@@ -223,7 +223,8 @@ contains
   ! Compute the isotropic 2PCF internally for disconnected 4PCF subtraction.
   !
   ! Accumulates pair counts into DD_2pcf(nbins) and RR_2pcf(nbins), then
-  ! computes xi_2pcf(bin) = DD_2pcf(bin) / RR_2pcf(bin) - 1.
+  ! computes xi_2pcf(bin) = DD_2pcf(bin) / RR_2pcf(bin) (signed-weight
+  ! numerator, so no "-1"; see note at the estimator below).
   ! Uses the same hub-based loop as query_graph_2pcf but with nmu=1 (isotropic)
   ! and dedicated arrays that do not interfere with N2/N3.
   ! ---------------------------------------------------------------------------
@@ -266,10 +267,13 @@ contains
     end do
     !$OMP END PARALLEL DO
 
-    ! Compute xi = DD/RR - 1 (Landy-Szalay with signed weights)
+    ! xi = N2/RR with NO "-1".  DD_2pcf is the signed all-pairs numerator
+    ! (DD - 2DR + RR) under the data=+1/random=-1 weight convention, so it is
+    ! already the correlation; it vanishes for an unclustered field.  This
+    ! matches the standalone estimator write_2pcf_results (xi = N2/N3).
     do bin_idx = 1, cfg%nbins
       if (RR_2pcf(bin_idx) /= 0.0d0) then
-        xi_2pcf(bin_idx) = DD_2pcf(bin_idx) / RR_2pcf(bin_idx) - 1.0d0
+        xi_2pcf(bin_idx) = DD_2pcf(bin_idx) / RR_2pcf(bin_idx)
       else
         xi_2pcf(bin_idx) = 0.0d0
       end if
@@ -714,8 +718,10 @@ contains
                 + xi_2pcf(b2) * xi_2pcf(b5) &
                 + xi_2pcf(b3) * xi_2pcf(b4)
 
-      ! Connected even channel: subtract disconnected (which is parity-even)
-      zeta_conn_even = (zeta_even - 1.0d0) - zeta_disc
+      ! Connected even channel: subtract disconnected (which is parity-even).
+      ! zeta_even = N4/R4 is already the total 4PCF (no "-1"; see no-parity
+      ! write routine).
+      zeta_conn_even = zeta_even - zeta_disc
 
       ! Connected odd channel: disconnected contribution is zero for odd parity
       zeta_conn_odd = zeta_odd
@@ -776,9 +782,10 @@ contains
                 + xi_2pcf(b2) * xi_2pcf(b5) &
                 + xi_2pcf(b3) * xi_2pcf(b4)
 
-      ! Connected 4PCF: total minus disconnected
-      ! zeta = N4/R4 = 1 + zeta_total, so zeta_total = zeta - 1
-      zeta_conn = (zeta - 1.0d0) - zeta_disc
+      ! Connected 4PCF: total minus disconnected.  zeta = N4/R4 with signed
+      ! weights is already the total 4PCF (it vanishes for an unclustered
+      ! field), so no "-1" is applied.
+      zeta_conn = zeta - zeta_disc
 
       write(unit_num, '(12(e14.7,1x), 5(e14.7,1x))') &
         radial_bins(b1), radial_bins(b1+1), &
