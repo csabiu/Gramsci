@@ -24,7 +24,7 @@ Each figure can also be made individually, e.g.
 | Fig. 4 — density dependence | `fig_benchmarks.py` | `benchmarks2.json` |
 | Fig. 5 — out-of-core overhead | `fig_benchmarks.py` | `benchmarks.json` |
 | Fig. 6 — parity signal recovery | `fig_parity_recovery.py` | `parity_recovery.json` |
-| Fig. 7 — DESI vs EZmock 3PCF | `fig_desi_ezmock_3pcf.py` | `ezmock_3pcf_slice.csv` |
+| Fig. 7 — DESI vs EZmock 3PCF (all configs + key) | `fig_desi_ezmock_3pcf.py` | `ezmock_3pcf_allconfig.csv`, `threepcf_config_scales.csv` |
 | Fig. 8 — DESI vs EZmock 4PCF | `fig_desi_ezmock_4pcf.py` | `ezmock_4pcf_band.csv` |
 | Fig. 9 — Quijote fiducial 3PCF | `fig_quijote_fiducial.py` | `quijote_fiducial_3pcf.csv` |
 
@@ -41,10 +41,15 @@ The parity null-test statistic quoted in the text
   `analysis/benchmarks/run_benchmarks{,2}.py` in the main repository.
 - **`parity_recovery.json`** — the chiral-tetrahedra injection sweep
   (analytic recovery test), produced by `analysis/parity/parity_recovery.py`.
-- **`ezmock_3pcf_slice.csv`, `ezmock_4pcf_band.csv`** — the DESI DR1 LRG
-  measurements together with the EZmock ensemble mean and scatter,
-  combined across Galactic caps. Reduced from the per-realization
-  measurement outputs (24 EZmocks for the 3PCF, 25 for the 4PCF).
+- **`ezmock_3pcf_allconfig.csv`, `ezmock_4pcf_band.csv`** — the DESI DR1
+  LRG measurements together with the EZmock ensemble mean and scatter, over
+  all binned configurations. The 3PCF combines NGC, SGC, and both redshift
+  bins at the count level; the 4PCF combines the caps per redshift bin.
+  Reduced from the per-realization measurement outputs (24 EZmocks for the
+  3PCF, 25 for the 4PCF).
+- **`threepcf_config_scales.csv`** — the three sorted triangle side-length
+  bin-centres ($r_1 \le r_2 \le r_3$) per 3PCF configuration, for the key
+  panel of Fig. 7.
 - **`quijote_fiducial_3pcf.csv`** — the 100-realization Quijote fiducial
   3PCF mean and scatter along the equilateral and isoceles cuts.
 

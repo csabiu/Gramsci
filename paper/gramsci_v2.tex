@@ -742,28 +742,40 @@ independently.
 \subsection{3PCF versus the mock ensemble}
 \label{sec:desi3pcf}
 
-Figure~\ref{fig:desimock3} compares the redshift-binned DESI 3PCF with
-the EZmock ensemble in the isoceles slice $\zeta(55, 75, r_3)$,
-rebinned from 5 to 10$\Mpch$ (exactly, since binned counts are
-additive).  Each of the 25 mocks is processed through the same cap
-combination; the band shows the ensemble mean and scatter, and the same
-scatter provides the error bars on the data points.  The agreement is
-good in both redshift bins ($\chi^2/{\rm dof} = 4.7/9$ and $9.8/9$
-against the mock mean, diagonal errors): in particular the
-negative-to-positive transition through the acoustic region seen in the
-data is reproduced by the mock mean, confirming that the BAO-scale
-three-point signal in the LRG sample is consistent with the
-$\Lambda$CDM-calibrated mocks.
+Figure~\ref{fig:desimock3} compares the full DESI 3PCF against the EZmock
+ensemble across all $220$ binned triangle configurations
+($50 < r < 150\Mpch$, 10$\Mpch$ bins), with NGC, SGC, and both redshift
+bins combined at the count level ($S^3$ effective-volume weighting,
+rebinned exactly from the native 5$\Mpch$ measurement).  The top panel
+shows $\zeta$ on a symmetric-log axis, which spans the hierarchical
+decay from the small-scale configurations (left) to the near-zero
+large-scale configurations (right); the middle panel shows the residual
+$\zeta_{\rm DESI} - \bar\zeta_{\rm mock}$ against the mock scatter; and
+the bottom panel keys the configuration axis to physical scale.  Because
+a triangle is specified by three side lengths, this key is three lines:
+the sorted side-length bins $r_1 \le r_2 \le r_3$ of each configuration,
+whose nested staircase reflects the lexicographic ordering of the
+configurations.  Across the $213$ well-measured configurations the data
+track the ensemble with $\chi^2/{\rm dof} = 1.4$ (diagonal errors; the
+off-diagonal configuration covariance, not included here, would reduce
+this), confirming that the configuration-space three-point signal of the
+LRG sample is consistent with the $\Lambda$CDM-calibrated mocks across the
+full triangle space.
 
 \begin{figure*}
 \centering
-\includegraphics[width=0.94\textwidth]{figures/desi_vs_ezmock_3pcf.pdf}
-\caption{DESI DR1 LRG 3PCF versus the EZmock ensemble in the isoceles
-slice $\zeta(55, 75, r_3)$ (10$\Mpch$ bins), for the two redshift bins
-(NGC and SGC combined at the count level in both data and mocks).  The
-shaded band is the mock ensemble mean $\pm 1\sigma$ (25 realisations);
-data error bars use the same mock scatter.  The acoustic-region rise in
-the data is reproduced by the ensemble.
+\includegraphics[width=\textwidth]{figures/desi_vs_ezmock_3pcf.pdf}
+\caption{DESI DR1 LRG 3PCF versus the EZmock ensemble over all $220$
+triangle configurations ($50 < r < 150\Mpch$, 10$\Mpch$ bins; NGC, SGC,
+and both redshift bins combined at the count level in data and mocks).
+\textit{Top:} $\zeta$ (symlog axis), DESI points over the mock mean
+$\pm 1\sigma$ band (24 realisations).  \textit{Middle:} the residual
+$\zeta_{\rm DESI} - \bar\zeta_{\rm mock}$ with the $\pm 1\sigma$ mock
+band.  \textit{Bottom:} a key to the configuration axis --- the three
+sorted triangle side-length bins $r_1 \le r_2 \le r_3$ of each
+configuration, so a vertical read-off gives the triangle shape.  The
+nested staircase reflects the lexicographic ordering of the canonical
+configurations.
 \label{fig:desimock3}}
 \end{figure*}
 

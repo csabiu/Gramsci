@@ -37,38 +37,68 @@ def loadtxt_skip(path):
 
 
 # ---------------------------------------------------------------------------
-# Fig 7: DESI 3PCF vs EZmock, isoceles slice (10 Mpc rebin)
+# Fig 7: DESI 3PCF vs EZmock, ALL configurations, NGC+SGC and both redshift
+# bins combined at the count level (S^3 effective-volume weighting), 10 Mpc
+# rebin.  Also the three sorted triangle-side scales per configuration.
 # ---------------------------------------------------------------------------
+S_DESI_3PCF = {('NGC', 1): 1.798173e5, ('NGC', 2): 1.754226e5,
+               ('SGC', 1): 9.207662e4, ('SGC', 2): 8.807297e4}
+
+
 def reduce_3pcf():
-    from mock_errorbars_3pcf import (load_sums, combine_mock_counts,
-                                     rebin_counts, slice_cut, DATA_COMB)
+    from mock_errorbars_3pcf import load_sums, combine_mock_counts, rebin_counts
     sums = load_sums()
     mock_ids = sorted({int(re.search(r'mock(\d+)', f).group(1))
                        for f in glob.glob(os.path.join(EZ, 'NGC_zbin1_mock*.3pcf'))})
-    rows = [['zbin', 'r3', 'desi', 'mock_mean', 'mock_sigma']]
-    nmock = {}
-    for zbin in (1, 2):
-        slices = []
-        for n in mock_ids:
-            res = combine_mock_counts(n, zbin, sums)
-            if res is None:
-                continue
-            e6, nnn, rrr = res
-            ec, zc = rebin_counts(e6, nnn, rrr)
-            r_s, z_s, _ = slice_cut(ec, zc)
-            slices.append(z_s)
-        slices = np.array(slices)
-        nmock[zbin] = slices.shape[0]
-        mmean = np.nanmean(slices, axis=0)
-        msig = np.nanstd(slices, axis=0, ddof=1)
-        data = np.loadtxt(DATA_COMB[zbin])
-        e6d, zd = rebin_counts(data[:, :6], data[:, 6], data[:, 7])
-        r_d, z_d, _ = slice_cut(e6d, zd)
-        for r, d, m, s in zip(r_d, z_d, mmean, msig):
-            rows.append([zbin, f'{r:.4f}', f'{d:.8e}', f'{m:.8e}', f'{s:.8e}'])
-    with open(os.path.join(OUT, 'ezmock_3pcf_slice.csv'), 'w', newline='') as f:
-        csv.writer(f).writerows(rows)
-    print(f'  ezmock_3pcf_slice.csv  (nmock={nmock})')
+
+    # DESI: sum S^3-weighted counts over the four (cap, zbin) sub-samples
+    nnn = rrr = None
+    e6 = None
+    for cap in ('NGC', 'SGC'):
+        for z in (1, 2):
+            d = loadtxt_skip(os.path.join(DESI, f'LRG_{cap}_zbin{z}.3pcf'))
+            e6 = d[:, :6]
+            w = S_DESI_3PCF[(cap, z)]**3
+            nnn = w * d[:, 6] if nnn is None else nnn + w * d[:, 6]
+            rrr = w * d[:, 7] if rrr is None else rrr + w * d[:, 7]
+    ec, zdesi = rebin_counts(e6, nnn, rrr)
+
+    # mocks: per mock, add the two zbins' cap-combined counts, then rebin
+    stack = []
+    for n in mock_ids:
+        r1 = combine_mock_counts(n, 1, sums)
+        r2 = combine_mock_counts(n, 2, sums)
+        if r1 is None or r2 is None:
+            continue
+        e, n1, rr1 = r1
+        _, n2, rr2 = r2
+        _, zc = rebin_counts(e, n1 + n2, rr1 + rr2)
+        stack.append(zc)
+    stack = np.array(stack)
+    nm = stack.shape[0]
+    good = np.all(np.isfinite(stack) & (np.abs(stack) < 1e3), axis=0)
+    safe = np.where(good, stack, np.nan)
+    mean = np.where(good, np.nanmean(safe, axis=0), np.nan)
+    sig = np.where(good, np.nanstd(safe, axis=0, ddof=1), 0.0)
+
+    with open(os.path.join(OUT, 'ezmock_3pcf_allconfig.csv'), 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['config', 'desi', 'mock_mean', 'mock_sigma', 'valid'])
+        for i in range(len(mean)):
+            w.writerow([i + 1, f'{zdesi[i]:.8e}',
+                        f'{mean[i]:.8e}' if np.isfinite(mean[i]) else 'nan',
+                        f'{sig[i]:.8e}', int(good[i])])
+
+    r1c = 0.5 * (ec[:, 0] + ec[:, 1])
+    r2c = 0.5 * (ec[:, 2] + ec[:, 3])
+    r3c = 0.5 * (ec[:, 4] + ec[:, 5])
+    with open(os.path.join(OUT, 'threepcf_config_scales.csv'), 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['config', 'r1', 'r2', 'r3'])
+        for i in range(len(r1c)):
+            w.writerow([i + 1, f'{r1c[i]:.3f}', f'{r2c[i]:.3f}', f'{r3c[i]:.3f}'])
+    print(f'  ezmock_3pcf_allconfig.csv + threepcf_config_scales.csv  '
+          f'(nmock={nm}, nconfig={len(mean)})')
 
 
 # ---------------------------------------------------------------------------
