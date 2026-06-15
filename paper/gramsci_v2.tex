@@ -109,12 +109,14 @@ configuration-space connected 4PCF with parity decomposition.
 GRAMSCI \citep{sabiu19} uses a graph-database approach: it builds a compact
 sorted adjacency structure once from a KD-tree, then queries it for any
 combination of 2-, 3-, and 4-point statistics without revisiting the
-original coordinates.  This paper extends the original work in four
+original coordinates.  This paper extends the original work in five
 directions (Section~\ref{sec:new}): an $O(m)$ merge-walk inner kernel
 (Section~\ref{sec:mergewalk}), a parity-decomposed 4PCF
-(Section~\ref{sec:parity}), a Python interface (Section~\ref{sec:python}),
-and a GPU port of the complete query engine with out-of-core support for
-graphs exceeding device memory (Section~\ref{sec:gpu}).
+(Section~\ref{sec:parity}), a connected 4PCF with internal disconnected
+subtraction (Section~\ref{sec:connected}), a Python interface
+(Section~\ref{sec:python}), and a GPU port of the complete query engine
+with out-of-core support for graphs exceeding device memory
+(Section~\ref{sec:gpu}).
 
 %% ===================================================================
 \section{The GRAMSCI Algorithm}
@@ -299,6 +301,56 @@ parity-symmetric field; a non-zero measurement signals parity violation
 \citep{slepian25} --- have generated significant interest, and
 independent configuration-space measurements provide a direct cross-check
 on spherical-harmonic-based analyses.
+
+\subsection{Connected 4PCF: the disconnected subtraction}
+\label{sec:connected}
+
+The raw four-point estimator $\zeta^{(4)} = \mathrm{NNNN}/\mathrm{RRRR}$
+measures the \emph{total} 4PCF, which contains both the connected
+(genuine four-point, trispectrum) signal and a \emph{disconnected}
+contribution built from products of two-point functions.  For a Gaussian
+field the four-point function reduces entirely to this disconnected part
+through Wick's theorem, so the connected 4PCF isolates the non-Gaussian
+information and is the quantity of interest for primordial-trispectrum and
+parity studies \citep{sefusatti07}.  The original code \citep{sabiu19}
+reported only the total $\zeta^{(4)}$; GRAMSCI~v2 additionally returns the
+connected function.
+
+For four points labelled $1,2,3,4$ the disconnected part is the sum over
+the three ways of partitioning them into two disjoint pairs,
+\begin{equation}
+  \zeta^{(4)}_{\rm disc} = \xi(r_{12})\,\xi(r_{34})
+                         + \xi(r_{13})\,\xi(r_{24})
+                         + \xi(r_{14})\,\xi(r_{23}),
+  \label{eq:disc}
+\end{equation}
+where $\xi$ is the two-point correlation function and the $r_{ab}$ are the
+six pairwise separations of the tetrahedron.  Equation~(\ref{eq:disc}) is
+invariant under the $S_4$ relabelling of the four vertices that defines a
+configuration, so it depends only on the binned configuration and is
+evaluated once per configuration from the binned $\xi$.
+
+The required $\xi$ is computed internally on the \emph{same} adjacency
+graph and radial bins as the 4PCF, making the subtraction self-consistent
+with the four-point measurement (identical bin edges, identical pair set,
+no extra catalogue pass beyond a single sweep of the graph).  It uses the
+same signed-weight estimator as the standalone 2PCF
+(Section~\ref{sec:graph}): with data weights normalised to sum $+1$ and
+random weights to sum $-1$, the sum of $w_i w_j$ over all pairs in a bin
+is the Landy--Szalay numerator $DD - 2DR + RR$, so
+$\xi = (\text{signed pair sum})/RR$ is already the correlation function
+and vanishes for an unclustered field --- no additive constant enters.
+The connected 4PCF is then
+\begin{equation}
+  \zeta^{(4)}_{\rm conn} = \zeta^{(4)} - \zeta^{(4)}_{\rm disc}.
+  \label{eq:conn}
+\end{equation}
+For the parity decomposition (Section~\ref{sec:parity}) the disconnected
+term is parity-even and is removed only from the even channel; the
+parity-odd 4PCF is intrinsically connected.  At the separations probed
+here the disconnected term dominates the total by roughly an order of
+magnitude, so isolating the connected residual
+(Figure~\ref{fig:desimock4}) is essential for any four-point science.
 
 \subsection{Python interface}
 \label{sec:python}
@@ -932,7 +984,7 @@ extract additional signal-to-noise from the same catalogue.
 \section{Summary}
 \label{sec:summary}
 
-We have presented four additions to GRAMSCI:
+We have presented five additions to GRAMSCI:
 
 \begin{enumerate}
 \item \textbf{Merge-walk inner kernel.}  Replacing binary-search with
@@ -948,6 +1000,11 @@ We have presented four additions to GRAMSCI:
   parity-even and parity-odd channels at negligible additional cost,
   enabling direct tests of parity violation.  Degenerate (zero-volume)
   tetrahedra are excluded from the odd channel deterministically.
+\item \textbf{Connected 4PCF.}  An internally computed two-point function,
+  evaluated on the same graph and binning, supplies the disconnected
+  (Gaussian) term $\zeta^{(4)}_{\rm disc}$, which is subtracted from the
+  total to return the connected 4PCF --- the genuine four-point signal ---
+  at the cost of a single extra sweep of the graph.
 \item \textbf{Python interface.}  A thin NumPy-based wrapper calls the
   Fortran engine via subprocess, handling all file I/O automatically and
   returning structured result objects.
