@@ -7,6 +7,10 @@
 src/gramsci
 src/domain_decomposition
 src_gpu/gramsci_gpu
+src_opencl/gramsci_cl
+
+# Generated source (built from kernels.cl by embed_kernels.sh)
+src_opencl/cl_kernels_module.F90
 
 # Python
 __pycache__/
