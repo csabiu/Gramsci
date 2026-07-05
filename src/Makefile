@@ -33,7 +33,8 @@ all:	gramsci domain_decomposition
 
 # Module dependency chain
 MODULES = extension.o kdtree2.o node_module.o sorting_module.o \
-          config_module.o io_module.o graph_utils_module.o \
+          config_module.o io_module.o analytic_randoms_module.o \
+          graph_utils_module.o \
           graph_module.o query_2pcf_module.o query_3pcf_module.o \
           query_4pcf_module.o
 
@@ -44,11 +45,12 @@ gramsci: $(MODULES) gramsci.o
 # Explicit dependency rules for module compilation order
 config_module.o: kdtree2.o node_module.o extension.o
 io_module.o: kdtree2.o config_module.o
+analytic_randoms_module.o: kdtree2.o config_module.o
 graph_utils_module.o: kdtree2.o config_module.o
 graph_module.o: kdtree2.o node_module.o sorting_module.o config_module.o graph_utils_module.o
-query_2pcf_module.o: kdtree2.o config_module.o
-query_3pcf_module.o: kdtree2.o config_module.o graph_utils_module.o
-query_4pcf_module.o: kdtree2.o config_module.o graph_utils_module.o
+query_2pcf_module.o: kdtree2.o config_module.o analytic_randoms_module.o
+query_3pcf_module.o: kdtree2.o config_module.o graph_utils_module.o analytic_randoms_module.o
+query_4pcf_module.o: kdtree2.o config_module.o graph_utils_module.o analytic_randoms_module.o
 gramsci.o: $(MODULES)
 
 domain_decomposition: domain_decomposition.o

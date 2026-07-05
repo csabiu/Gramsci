@@ -44,6 +44,16 @@ def _load(path):
     return np.loadtxt(path, skiprows=1)
 
 
+def _box_arg(box):
+    """Format the -box argument: scalar L or (Lx, Ly, Lz)."""
+    box = np.atleast_1d(np.asarray(box, dtype=np.float64))
+    if box.size == 1:
+        return f'{box[0]:.10g}'
+    if box.size == 3:
+        return ','.join(f'{v:.10g}' for v in box)
+    raise ValueError("box must be a scalar side length or a 3-sequence (Lx, Ly, Lz)")
+
+
 # ---------------------------------------------------------------------------
 # Result containers
 # ---------------------------------------------------------------------------
@@ -149,7 +159,7 @@ class FourPCFResult:
 # ---------------------------------------------------------------------------
 
 def compute_2pcf(positions, weights, randoms_pos=None, randoms_weights=None,
-                 rmin=1.0, rmax=30.0, nbins=10, nmu=1, binary=None):
+                 rmin=1.0, rmax=30.0, nbins=10, nmu=1, box=None, binary=None):
     """Compute the 2-point correlation function.
 
     Parameters
@@ -160,6 +170,10 @@ def compute_2pcf(positions, weights, randoms_pos=None, randoms_weights=None,
     rmin, rmax : float        — radial range
     nbins      : int          — number of radial bins
     nmu        : int          — number of mu bins (1 = isotropic)
+    box        : float or (3,) — periodic box side length(s).  Separations use
+                 the minimum image; if no randoms are given, RR is computed
+                 analytically and no random catalog is needed.  Requires
+                 rmax < L/2 and nmu = 1.
     binary     : str or Path  — path to gramsci binary (auto-detected if None)
 
     Returns
@@ -179,12 +193,14 @@ def compute_2pcf(positions, weights, randoms_pos=None, randoms_weights=None,
             ran = os.path.join(tmp, 'rand.ran')
             _write_catalog(ran, randoms_pos, randoms_weights)
             args += ['-ran', ran]
+        if box is not None:
+            args += ['-box', _box_arg(box)]
         _run(args, tmp)
         return TwoPCFResult(_load(out))
 
 
 def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
-                 rmin=1.0, rmax=30.0, nbins=6, nmu=1, binary=None):
+                 rmin=1.0, rmax=30.0, nbins=6, nmu=1, box=None, binary=None):
     """Compute the 3-point correlation function (all triangle configurations).
 
     Parameters
@@ -195,6 +211,10 @@ def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
     rmin, rmax : float
     nbins      : int   — number of radial bins (n_configs ≈ nbins³/6)
     nmu        : int   — number of mu bins (1 = isotropic)
+    box        : float or (3,) — periodic box side length(s).  Separations use
+                 the minimum image; if no randoms are given, RRR is computed
+                 analytically and no random catalog is needed.  Requires
+                 rmax <= L/4 and nmu = 1.
     binary     : str or Path
 
     Returns
@@ -214,12 +234,14 @@ def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
             ran = os.path.join(tmp, 'rand.ran')
             _write_catalog(ran, randoms_pos, randoms_weights)
             args += ['-ran', ran]
+        if box is not None:
+            args += ['-box', _box_arg(box)]
         _run(args, tmp)
         return ThreePCFResult(_load(out))
 
 
 def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
-                 rmin=1.0, rmax=30.0, nbins=3, parity=False, binary=None):
+                 rmin=1.0, rmax=30.0, nbins=3, parity=False, box=None, binary=None):
     """Compute the 4-point correlation function.
 
     Parameters
@@ -230,6 +252,10 @@ def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
     rmin, rmax : float
     nbins      : int   — number of radial bins (n_configs grows as ~nbins⁶/48)
     parity     : bool  — if True, decompose into parity-even and parity-odd channels
+    box        : float or (3,) — periodic box side length(s).  Separations use
+                 the minimum image; if no randoms are given, RRRR is computed
+                 analytically and no random catalog is needed.  Requires
+                 rmax <= L/4.
     binary     : str or Path
 
     Returns
@@ -253,5 +279,7 @@ def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
             ran = os.path.join(tmp, 'rand.ran')
             _write_catalog(ran, randoms_pos, randoms_weights)
             args += ['-ran', ran]
+        if box is not None:
+            args += ['-box', _box_arg(box)]
         _run(args, tmp)
         return FourPCFResult(_load(out), parity=parity)

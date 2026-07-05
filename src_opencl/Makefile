@@ -41,7 +41,8 @@ endif
 # ---- Object lists ----
 # CPU modules (compiled from ../src with the same gfortran -> .mod compatible)
 CPU_OBJS = extension.o kdtree2.o node_module.o sorting_module.o \
-           config_module.o io_module.o graph_utils_module.o \
+           config_module.o io_module.o analytic_randoms_module.o \
+           graph_utils_module.o \
            graph_module.o query_2pcf_module.o \
            query_3pcf_module.o query_4pcf_module.o
 
@@ -86,6 +87,9 @@ config_module.o: $(SRCDIR)/config_module.F90
 	$(F90) $(FFLAGS) -c $< -o $@
 io_module.o: $(SRCDIR)/io_module.F90
 	$(F90) $(FFLAGS) -c $< -o $@
+
+analytic_randoms_module.o: $(SRCDIR)/analytic_randoms_module.F90
+	$(F90) $(FFLAGS) -c $< -o $@
 graph_utils_module.o: $(SRCDIR)/graph_utils_module.F90
 	$(F90) $(FFLAGS) -c $< -o $@
 graph_module.o: $(SRCDIR)/graph_module.F90
@@ -105,11 +109,12 @@ gramsci_cl: $(ALL_OBJS)
 # ---- Module dependency rules ----
 config_module.o: kdtree2.o node_module.o extension.o
 io_module.o: kdtree2.o config_module.o
+analytic_randoms_module.o: kdtree2.o config_module.o
 graph_utils_module.o: kdtree2.o config_module.o
 graph_module.o: kdtree2.o node_module.o sorting_module.o config_module.o graph_utils_module.o
-query_2pcf_module.o: kdtree2.o config_module.o
-query_3pcf_module.o: kdtree2.o config_module.o graph_utils_module.o
-query_4pcf_module.o: kdtree2.o config_module.o graph_utils_module.o
+query_2pcf_module.o: kdtree2.o config_module.o analytic_randoms_module.o
+query_3pcf_module.o: kdtree2.o config_module.o graph_utils_module.o analytic_randoms_module.o
+query_4pcf_module.o: kdtree2.o config_module.o graph_utils_module.o analytic_randoms_module.o
 
 cl_env_module.o: cl_module.o cl_kernels_module.o
 csr_cl_module.o: config_module.o

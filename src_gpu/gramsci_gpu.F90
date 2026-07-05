@@ -183,9 +183,25 @@ program Ngramsci_gpu
     call query_graph_3pcf_all(1, cfg%num_data + cfg%num_rand)
   end if
 
-  ! Internal 2PCF for disconnected 4PCF subtraction: CPU, uses output(:)
-  if (cfg%four_pcf .or. cfg%four_pcf_parity) then
+  ! Internal 2PCF for disconnected 4PCF subtraction (and, in analytic -box
+  ! mode, the 3PCF estimator subtraction): CPU, uses output(:)
+  if (cfg%four_pcf .or. cfg%four_pcf_parity .or. &
+      (cfg%analytic .and. (cfg%three_pcf .or. cfg%three_pcf_eq))) then
     call compute_2pcf_for_4pcf(1, cfg%num_data + cfg%num_rand)
+  end if
+
+  ! Analytic 4PCF: internal 3PCF pass (CPU, needs the jagged graph, so it
+  ! must precede build_csr) storing zeta3_internal for the 4PCF estimator
+  ! subtraction.  N2/N3 are cleared around the pass so the later GPU 3PCF
+  ! queries start from clean accumulators.
+  if (cfg%analytic .and. (cfg%four_pcf .or. cfg%four_pcf_parity)) then
+    N2 = 0.0d0
+    N3 = 0.0d0
+    cfg%internal_3pcf = .true.
+    call query_graph_3pcf_all(1, cfg%num_data + cfg%num_rand)
+    cfg%internal_3pcf = .false.
+    N2 = 0.0d0
+    N3 = 0.0d0
   end if
 
   ! ---- Flatten graph to CSR ----

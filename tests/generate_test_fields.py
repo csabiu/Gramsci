@@ -169,3 +169,16 @@ def generate_chiral_tetra(n_struct, box_size, n_rand, seed, gal_file, ran_file,
 
     _write_catalog(gal_file, gal_positions, gal_weights)
     _write_catalog(ran_file, ran_positions, ran_weights)
+
+
+def generate_uniform_box(n_points, box_size, seed, gal_file):
+    """Generate a uniform (unclustered) catalog filling [0, box_size)^3.
+
+    Used by the periodic-box analytic-randoms tests: for uniform data every
+    correlation function should vanish and the data tuple counts should match
+    the analytic RR/RRR/RRRR expectations.
+    """
+    rng = np.random.default_rng(seed)
+    positions = rng.uniform(0, box_size, size=(n_points, 3))
+    weights = np.ones(n_points)
+    _write_catalog(gal_file, positions, weights)

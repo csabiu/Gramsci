@@ -32,6 +32,17 @@ module config_module
     integer :: n_dir_pixels = 64   ! = n_theta_dir * n_phi_dir
     logical :: loadran = .false.
     logical :: saveran = .false.
+    ! Periodic-box mode (-box): minimum-image separations; if no random
+    ! catalogue is given, RR/RRR/RRRR are computed analytically.
+    logical :: periodic = .false.
+    logical :: analytic = .false.
+    ! When true, the 3PCF write routine stores zeta3_internal (per config)
+    ! for the 4PCF connected-part subtraction instead of writing a file.
+    logical :: internal_3pcf = .false.
+    real(kdkind) :: boxsize(3) = 0.0d0
+    ! Power sums of the normalized data weights (set in read_files_2),
+    ! used for the analytic pair/triple/quadruple weight normalizations.
+    real(kdkind) :: sw2 = 0.0d0, sw3 = 0.0d0, sw4 = 0.0d0
     character(len=2000) :: file1 = '', file2 = '', ranfile = ''
     character(len=2000) :: output_file = 'result.txt'
     ! MPI state
@@ -58,8 +69,13 @@ module config_module
   integer, allocatable :: bintable6(:,:,:,:,:,:)
   ! Canonical bin 6-tuple for each 4PCF config index (shape [6, n_configs_4pcf])
   integer, allocatable :: canon_bins_4pcf(:,:)
+  ! Number of distinct ordered 6-tuples in each 4PCF config's S4 orbit
+  ! (filled by create_4pcf_binlookup; needed by the analytic RRRR)
+  integer, allocatable :: orbit_mult_4pcf(:)
   ! Internal 2PCF for disconnected 4PCF subtraction
   real(kdkind), allocatable :: DD_2pcf(:), RR_2pcf(:), xi_2pcf(:)
+  ! Internal connected 3PCF per config (analytic mode, 4PCF subtraction)
+  real(kdkind), allocatable :: zeta3_internal(:)
 
 contains
 
@@ -82,6 +98,13 @@ contains
     cfg%four_pcf_parity = .false.
     cfg%two_pcf = .false.
     cfg%half_graph = .true.
+    cfg%periodic = .false.
+    cfg%analytic = .false.
+    cfg%internal_3pcf = .false.
+    cfg%boxsize = 0.0d0
+    cfg%sw2 = 0.0d0
+    cfg%sw3 = 0.0d0
+    cfg%sw4 = 0.0d0
   end subroutine default_params
 
   subroutine parseOptions()
@@ -145,6 +168,11 @@ contains
         if (cfg%rank == cfg%master) print *, 'will ignore -gal -ran options'
         cfg%output_file = cfg%file1
         i = i + 2
+      case ('-box')
+        call getArgument(i+1, arg)
+        call parse_boxsize(trim(arg))
+        cfg%periodic = .true.
+        i = i + 2
       case ('-mpi')
         cfg%DOMPI = .true.
         i = i + 1
@@ -193,7 +221,68 @@ contains
       print *, 'ERROR: n_theta_dir * n_phi_dir must be <= 127 (phi pixel stored as int8)'
       stop
     end if
+
+    ! --- Periodic-box mode validation ---
+    if (cfg%periodic) then
+      if (any(cfg%boxsize <= 0.0d0)) then
+        print *, 'ERROR: -box requires positive box side length(s)'
+        stop
+      end if
+      if (cfg%cut) then
+        print *, 'ERROR: -box cannot be combined with -cut (domain decomposition)'
+        stop
+      end if
+      if (cfg%nmu > 1) then
+        print *, 'ERROR: -box supports isotropic analysis only (-nmu 1);'
+        print *, '       the midpoint line-of-sight mu is not defined in a periodic box'
+        stop
+      end if
+      if (cfg%rmax >= 0.5d0 * minval(cfg%boxsize)) then
+        print *, 'ERROR: -box requires rmax < L/2 (minimum-image uniqueness)'
+        stop
+      end if
+      if ((cfg%three_pcf .or. cfg%three_pcf_eq .or. cfg%four_pcf .or. cfg%four_pcf_parity) &
+          .and. cfg%rmax > 0.25d0 * minval(cfg%boxsize)) then
+        print *, 'ERROR: 3PCF/4PCF with -box require rmax <= L/4 so that the'
+        print *, '       minimum-image side lengths of every tuple are mutually consistent'
+        stop
+      end if
+      cfg%analytic = .not. cfg%rancat
+      if (cfg%rank == cfg%master) then
+        print '("Periodic box: ",3(f12.4,1x))', cfg%boxsize
+        if (cfg%analytic) then
+          print *, 'No random catalogue given: RR counts will be computed analytically'
+        else
+          print *, 'Random catalogue given: using catalogue randoms with periodic distances'
+        end if
+      end if
+    end if
   end subroutine parseOptions
+
+  ! Parse the -box argument: either a single side length L (cubic box)
+  ! or three comma-separated values Lx,Ly,Lz.
+  subroutine parse_boxsize(arg)
+    character(len=*), intent(in) :: arg
+    integer :: c1, c2, ios
+    c1 = index(arg, ',')
+    if (c1 == 0) then
+      read(arg, *, iostat=ios) cfg%boxsize(1)
+      cfg%boxsize(2:3) = cfg%boxsize(1)
+    else
+      c2 = c1 + index(arg(c1+1:), ',')
+      if (c2 == c1) then
+        print *, 'ERROR: -box takes either L or Lx,Ly,Lz'
+        stop
+      end if
+      read(arg(:c1-1), *, iostat=ios) cfg%boxsize(1)
+      if (ios == 0) read(arg(c1+1:c2-1), *, iostat=ios) cfg%boxsize(2)
+      if (ios == 0) read(arg(c2+1:), *, iostat=ios) cfg%boxsize(3)
+    end if
+    if (ios /= 0) then
+      print *, 'ERROR: cannot parse -box argument: ', trim(arg)
+      stop
+    end if
+  end subroutine parse_boxsize
 
   subroutine print_help()
     print *, 'PURPOSE: Code for calculating the N-PCF of a 3D point set.'
@@ -219,6 +308,9 @@ contains
     print *, '       -nmu    number of mu bins (enables anisotropic analysis)'
     print *, '       -log    use logarithmic radial binning'
     print *, '       -cut    use file format with selection cuts'
+    print *, '       -box    periodic box side length L (or Lx,Ly,Lz).'
+    print *, '               Uses minimum-image separations; without -ran the'
+    print *, '               RR/RRR/RRRR counts are computed analytically'
     print *, ' '
     print *, 'QUERY MODES:'
     print *, '       -2pcf   2-point correlation function'
@@ -232,7 +324,10 @@ contains
   subroutine create_binlookup()
     integer :: i, j, k
 
-    if (cfg%three_pcf) then
+    ! The analytic 4PCF estimator needs the internal per-config 3PCF for its
+    ! connected-part subtraction, so build the 3PCF lookup in that mode too.
+    if (cfg%three_pcf .or. &
+        (cfg%analytic .and. (cfg%four_pcf .or. cfg%four_pcf_parity))) then
       allocate(bintable(cfg%nbins, cfg%nbins, cfg%nbins, 1))
       cfg%config_bins = 0
       do i = 1, cfg%nbins
@@ -267,7 +362,9 @@ contains
     if (allocated(R4)) deallocate(R4)
     if (allocated(bintable6)) deallocate(bintable6)
     if (allocated(canon_bins_4pcf)) deallocate(canon_bins_4pcf)
+    if (allocated(orbit_mult_4pcf)) deallocate(orbit_mult_4pcf)
     if (allocated(bintable)) deallocate(bintable)
+    if (allocated(zeta3_internal)) deallocate(zeta3_internal)
     if (allocated(DD_2pcf)) deallocate(DD_2pcf)
     if (allocated(RR_2pcf)) deallocate(RR_2pcf)
     if (allocated(xi_2pcf)) deallocate(xi_2pcf)

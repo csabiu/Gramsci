@@ -183,6 +183,15 @@ program Ngramsci
   end block
 
   if (cfg%two_pcf) call query_graph_2pcf(1, cfg%num_data + cfg%num_rand)
+
+  ! Internal 2PCF: needed for the 4PCF disconnected term and, in analytic
+  ! (-box, no -ran) mode, for the 3PCF/equilateral estimator subtraction.
+  ! Must run before the 3PCF queries, whose write routines use xi_2pcf.
+  if (cfg%four_pcf .or. cfg%four_pcf_parity .or. &
+      (cfg%analytic .and. (cfg%three_pcf .or. cfg%three_pcf_eq))) then
+    call compute_2pcf_for_4pcf(1, cfg%num_data + cfg%num_rand)
+  end if
+
   if (cfg%three_pcf) then
     if (use_bsearch) then
       call query_graph_3pcf_all_bsearch(1, cfg%num_data + cfg%num_rand)
@@ -192,8 +201,17 @@ program Ngramsci
   end if
   if (cfg%three_pcf_eq) call query_graph_equilateral_triangle(1, cfg%num_data + cfg%num_rand)
 
-  if (cfg%four_pcf .or. cfg%four_pcf_parity) then
-    call compute_2pcf_for_4pcf(1, cfg%num_data + cfg%num_rand)
+  ! Analytic 4PCF: internal 3PCF pass storing the connected zeta3 per config
+  ! (zeta3_internal) for the 4PCF estimator subtraction.  N2/N3 are cleared
+  ! around the pass so it neither inherits nor leaks triangle counts.
+  if (cfg%analytic .and. (cfg%four_pcf .or. cfg%four_pcf_parity)) then
+    N2 = 0.0d0
+    N3 = 0.0d0
+    cfg%internal_3pcf = .true.
+    call query_graph_3pcf_all(1, cfg%num_data + cfg%num_rand)
+    cfg%internal_3pcf = .false.
+    N2 = 0.0d0
+    N3 = 0.0d0
   end if
 
   if (cfg%four_pcf) then

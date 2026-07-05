@@ -41,7 +41,8 @@ FLAGS      = $(BASE_FLAGS) $(OPT_FLAGS) $(ACC_FLAGS) -mp
 # CPU modules (compiled from ../src/ with nvfortran to generate local .mod files;
 # gfortran .mod files in ../src/ are NOT compatible with nvfortran)
 CPU_OBJS = extension.o kdtree2.o node_module.o sorting_module.o \
-           config_module.o io_module.o graph_utils_module.o \
+           config_module.o io_module.o analytic_randoms_module.o \
+           graph_utils_module.o \
            graph_module.o query_2pcf_module.o \
            query_3pcf_module.o query_4pcf_module.o
 
@@ -86,6 +87,9 @@ config_module.o: $(SRCDIR)/config_module.F90
 io_module.o: $(SRCDIR)/io_module.F90
 	$(F90) $(FLAGS) -c $< -o $@
 
+analytic_randoms_module.o: $(SRCDIR)/analytic_randoms_module.F90
+	$(F90) $(FLAGS) -c $< -o $@
+
 graph_utils_module.o: $(SRCDIR)/graph_utils_module.F90
 	$(F90) $(FLAGS) -c $< -o $@
 
@@ -111,11 +115,12 @@ gramsci_gpu: $(ALL_OBJS)
 
 config_module.o: kdtree2.o node_module.o extension.o
 io_module.o: kdtree2.o config_module.o
+analytic_randoms_module.o: kdtree2.o config_module.o
 graph_utils_module.o: kdtree2.o config_module.o
 graph_module.o: kdtree2.o node_module.o sorting_module.o config_module.o graph_utils_module.o
-query_2pcf_module.o: kdtree2.o config_module.o
-query_3pcf_module.o: kdtree2.o config_module.o graph_utils_module.o
-query_4pcf_module.o: kdtree2.o config_module.o graph_utils_module.o
+query_2pcf_module.o: kdtree2.o config_module.o analytic_randoms_module.o
+query_3pcf_module.o: kdtree2.o config_module.o graph_utils_module.o analytic_randoms_module.o
+query_4pcf_module.o: kdtree2.o config_module.o graph_utils_module.o analytic_randoms_module.o
 
 csr_module.o: config_module.o
 query_3pcf_gpu_module.o: config_module.o csr_module.o query_3pcf_module.o

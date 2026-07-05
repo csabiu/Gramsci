@@ -138,6 +138,8 @@ contains
     ! record the canonical tuple for each new orbit as we encounter it.
     n_configs_upper = (n**6 + 9*n**4 + 14*n**2) / 24
     allocate(canon_bins_4pcf(6, n_configs_upper))
+    allocate(orbit_mult_4pcf(n_configs_upper))
+    orbit_mult_4pcf = 0
 
     do b1 = 1, n
     do b2 = 1, n
@@ -184,6 +186,9 @@ contains
         bintable6(perm_bins(1), perm_bins(2), perm_bins(3), &
                   perm_bins(4), perm_bins(5), perm_bins(6)) = &
           canon_parity * cfg%n_configs_4pcf
+        ! Count the distinct ordered 6-tuples in this orbit (each table
+        ! entry is set exactly once); used by the analytic RRRR.
+        orbit_mult_4pcf(cfg%n_configs_4pcf) = orbit_mult_4pcf(cfg%n_configs_4pcf) + 1
       end do
 
     end do
@@ -267,13 +272,22 @@ contains
     end do
     !$OMP END PARALLEL DO
 
-    ! xi = N2/RR with NO "-1".  DD_2pcf is the signed all-pairs numerator
+    ! Analytic mode: no random points exist, so RR comes from the periodic
+    ! shell volumes and DD/RR - 1 is the natural estimator.  Otherwise
+    ! xi = N2/RR with NO "-1": DD_2pcf is the signed all-pairs numerator
     ! (DD - 2DR + RR) under the data=+1/random=-1 weight convention, so it is
     ! already the correlation; it vanishes for an unclustered field.  This
-    ! matches the standalone estimator write_2pcf_results (xi = N2/N3).
+    ! matches the standalone estimator write_2pcf_results.
+    if (cfg%analytic) then
+      call fill_rr_analytic()
+    end if
     do bin_idx = 1, cfg%nbins
       if (RR_2pcf(bin_idx) /= 0.0d0) then
-        xi_2pcf(bin_idx) = DD_2pcf(bin_idx) / RR_2pcf(bin_idx)
+        if (cfg%analytic) then
+          xi_2pcf(bin_idx) = DD_2pcf(bin_idx) / RR_2pcf(bin_idx) - 1.0d0
+        else
+          xi_2pcf(bin_idx) = DD_2pcf(bin_idx) / RR_2pcf(bin_idx)
+        end if
       else
         xi_2pcf(bin_idx) = 0.0d0
       end if
@@ -287,6 +301,12 @@ contains
     end if
 
   end subroutine compute_2pcf_for_4pcf
+
+  ! Fill RR_2pcf with the analytic periodic-box shell counts.
+  subroutine fill_rr_analytic()
+    use analytic_randoms_module, only: analytic_rr
+    call analytic_rr(RR_2pcf)
+  end subroutine fill_rr_analytic
 
   ! ---------------------------------------------------------------------------
   ! All-configurations 4PCF query with parity decomposition.
@@ -677,11 +697,19 @@ contains
   ! Write 4PCF parity results to output file.
   ! ---------------------------------------------------------------------------
   subroutine write_4pcf_results()
+    use analytic_randoms_module, only: analytic_rrrr
     integer :: config_idx, unit_num
     integer :: b1, b2, b3, b4, b5, b6
     real(kdkind) :: zeta_even, zeta_odd, zeta_disc, zeta_conn_even, zeta_conn_odd
 
     if (cfg%rank /= cfg%master) return
+
+    ! Analytic mode: RRRR from the periodic-box tetrahedron kernel.  The
+    ! parity-odd random count vanishes exactly (mirror quadruplets cancel).
+    if (cfg%analytic) then
+      call analytic_rrrr(R4(:, 1))
+      R4(:, 2) = 0.0d0
+    end if
 
     unit_num = 40
     open(unit_num, file=trim(cfg%output_file), status='unknown')
@@ -711,6 +739,21 @@ contains
         zeta_odd = N4(config_idx, 2) / R4(config_idx, 1)
       else
         zeta_odd = 0.0d0
+      end if
+
+      ! Analytic mode: NNNN is pure DDDD, so NNNN/RRRR = 1 + sum_6 xi(edge)
+      ! + sum_4 zeta3(face) + [xi*xi pairings + connected 4PCF].  Subtract
+      ! the lower-order terms so zeta_even keeps the same meaning as in the
+      ! signed-weight estimator.  The parity-weighted numerator needs no
+      ! subtraction: every lower-order term is parity-even and cancels.
+      if (cfg%analytic .and. R4(config_idx, 1) /= 0.0d0) then
+        zeta_even = zeta_even - 1.0d0 &
+          - xi_2pcf(b1) - xi_2pcf(b2) - xi_2pcf(b3) &
+          - xi_2pcf(b4) - xi_2pcf(b5) - xi_2pcf(b6) &
+          - zeta3_internal(bintable(b1, b2, b4, 1)) &
+          - zeta3_internal(bintable(b1, b3, b5, 1)) &
+          - zeta3_internal(bintable(b2, b3, b6, 1)) &
+          - zeta3_internal(bintable(b4, b5, b6, 1))
       end if
 
       ! Disconnected 4PCF: 3 complementary edge pairings (parity-even)
@@ -746,11 +789,17 @@ contains
   ! Write 4PCF results without parity channels.
   ! ---------------------------------------------------------------------------
   subroutine write_4pcf_results_noparity()
+    use analytic_randoms_module, only: analytic_rrrr
     integer :: config_idx, unit_num
     integer :: b1, b2, b3, b4, b5, b6
     real(kdkind) :: zeta, zeta_disc, zeta_conn
 
     if (cfg%rank /= cfg%master) return
+
+    ! Analytic mode: RRRR from the periodic-box tetrahedron kernel.
+    if (cfg%analytic) then
+      call analytic_rrrr(R4(:, 1))
+    end if
 
     unit_num = 40
     open(unit_num, file=trim(cfg%output_file), status='unknown')
@@ -773,6 +822,20 @@ contains
         zeta = N4(config_idx, 1) / R4(config_idx, 1)
       else
         zeta = 0.0d0
+      end if
+
+      ! Analytic mode: NNNN is pure DDDD, so NNNN/RRRR = 1 + sum_6 xi(edge)
+      ! + sum_4 zeta3(face) + [xi*xi pairings + connected 4PCF].  Subtract
+      ! the lower-order terms so zeta keeps the same meaning as in the
+      ! signed-weight estimator.
+      if (cfg%analytic .and. R4(config_idx, 1) /= 0.0d0) then
+        zeta = zeta - 1.0d0 &
+          - xi_2pcf(b1) - xi_2pcf(b2) - xi_2pcf(b3) &
+          - xi_2pcf(b4) - xi_2pcf(b5) - xi_2pcf(b6) &
+          - zeta3_internal(bintable(b1, b2, b4, 1)) &
+          - zeta3_internal(bintable(b1, b3, b5, 1)) &
+          - zeta3_internal(bintable(b2, b3, b6, 1)) &
+          - zeta3_internal(bintable(b4, b5, b6, 1))
       end if
 
       ! Disconnected 4PCF: 3 complementary edge pairings

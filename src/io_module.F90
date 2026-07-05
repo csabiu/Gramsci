@@ -143,6 +143,21 @@ contains
       -1.0d0 * weights(cfg%num_data+1:cfg%num_data+cfg%num_rand) / &
       sum(weights(cfg%num_data+1:cfg%num_data+cfg%num_rand))
 
+    ! Power sums of the normalized data weights, used by the analytic
+    ! random counts (pair/triple/quadruple weight normalizations)
+    cfg%sw2 = sum(weights(1:cfg%num_data)**2)
+    cfg%sw3 = sum(weights(1:cfg%num_data)**3)
+    cfg%sw4 = sum(weights(1:cfg%num_data)**4)
+
+    ! Periodic box: wrap all coordinates into [0, L)
+    if (cfg%periodic) then
+      do i = 1, cfg%num_data + cfg%num_rand
+        points(1, i) = modulo(points(1, i), cfg%boxsize(1))
+        points(2, i) = modulo(points(2, i), cfg%boxsize(2))
+        points(3, i) = modulo(points(3, i), cfg%boxsize(3))
+      end do
+    end if
+
     if (cfg%rank == 0) print *, 'Finished reading data file'
     if (cfg%rank == 0) print *, 'sum of weights: ', sum(weights)
   end subroutine read_files_2

@@ -3,7 +3,7 @@ import subprocess
 import math
 import numpy as np
 from generate_test_fields import (generate_pairs, generate_regular_tetra,
-                                  generate_chiral_tetra,
+                                  generate_chiral_tetra, generate_uniform_box,
                                   RMIN, RMAX, NBINS, R0, BOX_SIZE, N_RAND, SEED)
 
 def run(cmd):
@@ -204,6 +204,126 @@ def test_chiral_parity(bindir):
     print("  Test PASSED")
 
 
+def test_analytic_randoms(bindir):
+    """Test 4: periodic-box analytic randoms (-box without -ran).
+
+    A uniform catalog in a periodic box is its own null test:
+      * the RR column must equal the closed-form shell-volume expectation,
+      * NN/RR, NNN/RRR, NNNN/RRRR must all be ~ 1 (xi, zeta, zeta_conn ~ 0),
+      * the analytic-mode estimator must still localize a real pair signal.
+    """
+    print('\n=== Test: Periodic box analytic randoms ===')
+
+    gramsci = os.path.join(bindir, 'gramsci')
+    box = 200.0
+    n_uni = 6000
+    gal_file = 'tmp_uniform.gal'
+    generate_uniform_box(n_uni, box, SEED, gal_file)
+
+    base = (f"-rmin {RMIN} -rmax {RMAX} -nbins {NBINS} "
+            f"-box {box:g}")
+
+    # --- 4a: 2PCF, exact RR + null xi ---
+    out2 = 'tmp_uniform_an.2pcf'
+    run(f"{gramsci} -gal {gal_file} {base} -out {out2} -2pcf")
+    d2 = np.loadtxt(out2, skiprows=1)
+    # Exact analytic RR: (1 - sum w^2) / 2 * Vshell / Vbox with w_i = 1/N
+    w2 = (1.0 - 1.0 / n_uni) / 2.0
+    edges = np.linspace(RMIN, RMAX, NBINS + 1)
+    vshell = 4.0 * np.pi / 3.0 * (edges[1:] ** 3 - edges[:-1] ** 3)
+    rr_exact = w2 * vshell / box ** 3
+    assert np.allclose(d2[:, 5], rr_exact, rtol=1e-6), \
+        f"analytic RR mismatch: {d2[:, 5]} vs {rr_exact}"
+    print(f"  2PCF analytic RR matches closed form (rel err "
+          f"{np.max(np.abs(d2[:, 5] / rr_exact - 1)):.2e})")
+    assert np.all(np.abs(d2[:, 6]) < 0.06), \
+        f"uniform box xi should be ~0, got {d2[:, 6]}"
+    print(f"  2PCF null test passed: xi = {d2[:, 6]}")
+
+    # --- 4b: 3PCF null ---
+    out3 = 'tmp_uniform_an.3pcf'
+    run(f"{gramsci} -gal {gal_file} {base} -out {out3} -3pcf")
+    d3 = np.loadtxt(out3, skiprows=1)
+    ratio3 = d3[:, 6] / d3[:, 7]
+    assert abs(np.median(ratio3) - 1.0) < 0.05, \
+        f"uniform box NNN/RRR median should be ~1, got {np.median(ratio3):.4f}"
+    assert np.all(np.abs(ratio3 - 1.0) < 0.25), \
+        f"uniform box NNN/RRR should be ~1 per config, got {ratio3}"
+    assert np.median(np.abs(d3[:, 8])) < 0.05, \
+        f"uniform box zeta should be ~0, median |zeta| = {np.median(np.abs(d3[:, 8])):.4f}"
+    print(f"  3PCF null test passed: median NNN/RRR = {np.median(ratio3):.4f}, "
+          f"median |zeta| = {np.median(np.abs(d3[:, 8])):.4f}")
+
+    # --- 4c: 4PCF null + disconnected identity ---
+    out4 = 'tmp_uniform_an.4pcf'
+    run(f"{gramsci} -gal {gal_file} {base} -out {out4} -4pcf")
+    d4 = np.loadtxt(out4, skiprows=1)
+    assert d4.shape[1] == 17, f'analytic 4pcf expected 17 columns, got {d4.shape[1]}'
+    rrrr = d4[:, 13]
+    # restrict to well-populated configs (upper half of analytic RRRR)
+    pop = rrrr > np.median(rrrr[rrrr > 0])
+    ratio4 = d4[pop, 12] / d4[pop, 13]
+    assert abs(np.median(ratio4) - 1.0) < 0.05, \
+        f"uniform box NNNN/RRRR median should be ~1, got {np.median(ratio4):.4f}"
+    assert np.median(np.abs(d4[pop, 16])) < 0.05, \
+        f"uniform box zeta_conn should be ~0, median |zeta_conn| = " \
+        f"{np.median(np.abs(d4[pop, 16])):.4f}"
+    # identity: zeta_conn = zeta - zeta_disc (same as catalog mode)
+    tol = 1e-6 * (np.abs(d4[:, 14]) + np.abs(d4[:, 15])) + 1e-9
+    assert np.all(np.abs(d4[:, 16] - (d4[:, 14] - d4[:, 15])) <= tol), \
+        'analytic 4pcf disconnected identity failed'
+    print(f"  4PCF null test passed: median NNNN/RRRR = {np.median(ratio4):.4f}, "
+          f"median |zeta_conn| = {np.median(np.abs(d4[pop, 16])):.4f}")
+
+    # --- 4d: analytic mode still detects a real signal ---
+    gal_pairs = 'tmp_pairs_an.gal'
+    ran_unused = 'tmp_pairs_an.ran'
+    outp = 'tmp_pairs_an.2pcf'
+    generate_pairs(100, R0, BOX_SIZE, 10, SEED, gal_pairs, ran_unused)
+    run(f"{gramsci} -gal {gal_pairs} -rmin {RMIN} -rmax {RMAX} -nbins {NBINS} "
+        f"-box {BOX_SIZE:g} -out {outp} -2pcf")
+    dp = np.loadtxt(outp, skiprows=1)
+    xi = dp[:, 6]
+    print(f"  pairs-in-box xi: {xi}")
+    assert xi[1] > 1.0 and xi[1] > xi[0] + 1.0 and xi[1] > xi[2] + 1.0, \
+        f"analytic mode should localize the pair signal in bin 2, got {xi}"
+    print("  analytic-mode signal localization passed")
+
+    # --- 4e: -box combined with a random catalog (periodic + LS estimator) ---
+    ran_file = 'tmp_uniform.ran'
+    generate_uniform_box(20000, box, SEED + 99, ran_file)
+    outc = 'tmp_uniform_cat.2pcf'
+    run(f"{gramsci} -gal {gal_file} -ran {ran_file} {base} -out {outc} -2pcf")
+    dc = np.loadtxt(outc, skiprows=1)
+    # catalog RR (normalized) should match the analytic values within noise
+    ratio = dc[:, 5] / rr_exact / ((1.0 - 1.0 / 20000) / (1.0 - 1.0 / n_uni))
+    assert np.all(np.abs(ratio - 1.0) < 0.05), \
+        f"periodic catalog RR should match analytic within 5%, got {ratio}"
+    print(f"  periodic catalog-RR vs analytic-RR ratios: {ratio}")
+
+    # --- 4f: invalid option combinations must be rejected ---
+    r = subprocess.run(f"{gramsci} -gal {gal_file} -rmin {RMIN} -rmax 150 "
+                       f"-nbins {NBINS} -box {box:g} -out tmp_bad.out -2pcf",
+                       shell=True, capture_output=True, text=True)
+    assert 'ERROR' in r.stdout and not os.path.exists('tmp_bad.out'), \
+        "-box with rmax >= L/2 should be rejected"
+    r = subprocess.run(f"{gramsci} -gal {gal_file} -rmin {RMIN} -rmax 60 "
+                       f"-nbins {NBINS} -box {box:g} -out tmp_bad.out -3pcf",
+                       shell=True, capture_output=True, text=True)
+    assert 'ERROR' in r.stdout and not os.path.exists('tmp_bad.out'), \
+        "-box 3PCF with rmax > L/4 should be rejected"
+    r = subprocess.run(f"{gramsci} -gal {gal_file} -rmin {RMIN} -rmax {RMAX} "
+                       f"-nbins {NBINS} -nmu 4 -box {box:g} -out tmp_bad.out -2pcf",
+                       shell=True, capture_output=True, text=True)
+    assert 'ERROR' in r.stdout and not os.path.exists('tmp_bad.out'), \
+        "-box with -nmu > 1 should be rejected"
+    print("  invalid-combination rejection passed")
+
+    _cleanup(gal_file, out2, out3, out4, gal_pairs, ran_unused, outp,
+             ran_file, outc)
+    print("  Test PASSED")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -314,6 +434,7 @@ def main():
     test_pairs_2pcf(bindir)
     test_regular_tetra_connected(bindir)
     test_chiral_parity(bindir)
+    test_analytic_randoms(bindir)
 
     print('\n========================================')
     print('All correlation tests passed')

@@ -69,6 +69,12 @@ z = gramsci.compute_3pcf(data, wd, rand, wr, rmin=20, rmax=140, nbins=10)
 # --- connected & parity 4PCF ---
 q  = gramsci.compute_4pcf(data, wd, rand, wr, rmin=20, rmax=140, nbins=4)               # q.zeta_conn
 qp = gramsci.compute_4pcf(data, wd, rand, wr, rmin=20, rmax=140, nbins=4, parity=True)  # qp.zeta_even, qp.zeta_odd
+
+# --- periodic simulation box: no randoms needed ---
+# Minimum-image separations + analytic RR/RRR/RRRR (see below)
+xi = gramsci.compute_2pcf(data, wd, box=1000.0, rmin=1, rmax=150, nbins=30)
+z  = gramsci.compute_3pcf(data, wd, box=1000.0, rmin=20, rmax=140, nbins=10)
+q  = gramsci.compute_4pcf(data, wd, box=1000.0, rmin=20, rmax=140, nbins=4)
 ```
 
 Each call returns a small result object whose attributes are NumPy arrays. Point
@@ -95,12 +101,35 @@ bin/gramsci -gal galaxies.dat -ran randoms.dat \
 | `-nbins <N>`        | number of radial bins                                    |
 | `-nmu <N>`          | number of μ bins (anisotropic; default 1 = isotropic)    |
 | `-log`              | logarithmic radial binning                               |
+| `-box <L>`          | periodic box, side L (or `Lx,Ly,Lz`); no `-ran` ⇒ analytic RR |
 | `-2pcf`             | 2-point correlation function                             |
 | `-3pcf` / `-equi`   | 3PCF (all triangles) / equilateral only                  |
 | `-4pcf` / `-4pcfp`  | 4PCF / 4PCF with parity decomposition                    |
 
 For very large catalogues or large `rmax`, `bin/domain_decomposition` splits the
 volume into sub-regions that can be run separately (see [below](#large-catalogues)).
+
+### Periodic boxes — no randoms needed
+
+For a regular geometry such as a periodic simulation box, pass `-box L`
+(cubic) or `-box Lx,Ly,Lz` and omit `-ran`:
+
+```sh
+bin/gramsci -gal snapshot.dat -box 1000 -rmin 20 -rmax 140 -nbins 10 -3pcf -out result.3pcf
+```
+
+Separations then use the **minimum-image convention**, and the random counts
+are computed **analytically** instead of from a random catalogue — exactly for
+the 2PCF (shell volumes) and 3PCF (triangle kernel), and by deterministic
+semi-analytic quadrature for the 4PCF tetrahedron configurations. This removes
+both the cost and the shot noise of random catalogues. The estimators become
+the natural ones with all lower-order terms subtracted internally, so the
+output columns keep their usual meanings (for the 4PCF this includes an
+internal 2PCF and 3PCF pass to remove the six edge-ξ and four face-ζ₃ terms
+from `zeta`). Requirements: coordinates spanning one box period,
+`rmax < L/2` for the 2PCF, `rmax ≤ L/4` for the 3/4PCF, and `-nmu 1`.
+Combining `-box` with `-ran` is also allowed: distances are periodic and the
+usual catalogue estimators are used.
 
 ## Output
 

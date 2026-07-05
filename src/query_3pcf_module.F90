@@ -184,9 +184,40 @@ contains
   end subroutine query_graph_equilateral_triangle
 
   subroutine write_3pcf_results()
+    use analytic_randoms_module, only: analytic_rrr
     integer :: i, j, k, l, unit_num
+    real(kdkind) :: zeta
 
     if (cfg%rank /= cfg%master) return
+
+    ! Analytic mode: RRR from the periodic-box triangle kernel; NNN holds
+    ! pure DDD, so DDD/RRR = 1 + xi(r1) + xi(r2) + xi(r3) + zeta and the
+    ! connected 3PCF requires subtracting the internal 2PCF of the sides
+    ! (with a random catalogue the signed weights give zeta = NNN/RRR
+    ! directly).  xi_2pcf is filled by compute_2pcf_for_4pcf beforehand.
+    if (cfg%analytic) then
+      call analytic_rrr(N3(:, 1, 3))
+    end if
+
+    ! Internal pass (analytic 4PCF): store the connected 3PCF per config for
+    ! the 4PCF subtraction instead of writing an output file.
+    if (cfg%internal_3pcf) then
+      if (.not. allocated(zeta3_internal)) allocate(zeta3_internal(cfg%config_bins))
+      zeta3_internal = 0.0d0
+      do i = 1, cfg%nbins
+        do j = i, cfg%nbins
+          do k = j, cfg%nbins
+            associate(bin => bintable(i, j, k, 1))
+            if (N3(bin, 1, 3) > 0.0d0) then
+              zeta3_internal(bin) = N2(bin, 1, 3) / N3(bin, 1, 3) - 1.0d0 &
+                                    - xi_2pcf(i) - xi_2pcf(j) - xi_2pcf(k)
+            end if
+            end associate
+          end do
+        end do
+      end do
+      return
+    end if
 
     unit_num = 30
     open(unit_num, file=trim(cfg%output_file), status='unknown')
@@ -209,9 +240,19 @@ contains
                 N2(bin, l, 3), N3(bin, l, 3), N2(bin, l, 3) / N3(bin, l, 3)
             end do
           else
+            if (cfg%analytic) then
+              if (N3(bin, 1, 3) > 0.0d0) then
+                zeta = N2(bin, 1, 3) / N3(bin, 1, 3) - 1.0d0 &
+                       - xi_2pcf(i) - xi_2pcf(j) - xi_2pcf(k)
+              else
+                zeta = 0.0d0
+              end if
+            else
+              zeta = N2(bin, 1, 3) / N3(bin, 1, 3)
+            end if
             write(unit_num, '(9(e14.7,1x))') radial_bins(i), radial_bins(i+1), &
               radial_bins(j), radial_bins(j+1), radial_bins(k), radial_bins(k+1), &
-              N2(bin, 1, 3), N3(bin, 1, 3), N2(bin, 1, 3) / N3(bin, 1, 3)
+              N2(bin, 1, 3), N3(bin, 1, 3), zeta
           end if
           end associate
         end do
@@ -221,17 +262,33 @@ contains
   end subroutine write_3pcf_results
 
   subroutine write_equilateral_results()
+    use analytic_randoms_module, only: analytic_rrr_equilateral
     integer :: l, k, unit_num
+    real(kdkind) :: zeta
 
     if (cfg%rank /= cfg%master) return
+
+    ! Analytic mode: equilateral configs (l,l,l); see write_3pcf_results.
+    if (cfg%analytic) then
+      call analytic_rrr_equilateral(N3(:, 1, 3))
+    end if
 
     unit_num = 30
     open(unit_num, file=trim(cfg%output_file), status='unknown')
     do l = 1, cfg%nbins
       do k = 1, cfg%nmu
+        if (cfg%analytic) then
+          if (N3(l, k, 3) > 0.0d0) then
+            zeta = N2(l, k, 3) / N3(l, k, 3) - 1.0d0 - 3.0d0 * xi_2pcf(l)
+          else
+            zeta = 0.0d0
+          end if
+        else
+          zeta = N2(l, k, 3) / N3(l, k, 3)
+        end if
         write(unit_num, '(8(e14.7,1x))') radial_bins(l), radial_bins(l+1), &
              ((float(k)-1.)/cfg%mu_scale/2.), (float(k)/cfg%mu_scale/2.), &
-             N2(l, k, 3), N3(l, k, 3), N2(l, k, 3) / N3(l, k, 3)
+             N2(l, k, 3), N3(l, k, 3), zeta
       end do
     end do
     close(unit_num)

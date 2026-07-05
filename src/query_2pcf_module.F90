@@ -41,9 +41,22 @@ contains
   end subroutine query_graph_2pcf
 
   subroutine write_2pcf_results()
+    use analytic_randoms_module, only: analytic_rr
     integer :: l, k, unit_num
+    real(kdkind) :: rr_an(cfg%nbins), xi
 
     if (cfg%rank /= cfg%master) return
+
+    ! Analytic mode: RR from shell-volume fractions of the periodic box;
+    ! NN holds pure DD, so the natural estimator xi = DD/RR - 1 applies
+    ! (with a random catalogue the signed weights make NN/RR the LS
+    ! estimator directly, no -1).
+    if (cfg%analytic) then
+      call analytic_rr(rr_an)
+      do l = 1, cfg%nbins
+        N3(l, 1:cfg%nmu, 3) = rr_an(l) / cfg%nmu
+      end do
+    end if
 
     unit_num = 30
     print *, 'writing output to: ', trim(cfg%output_file)
@@ -52,9 +65,14 @@ contains
 
     do l = 1, cfg%nbins
       do k = 1, cfg%nmu
+        if (cfg%analytic) then
+          xi = N2(l, k, 3) / N3(l, k, 3) - 1.0d0
+        else
+          xi = N2(l, k, 3) / N3(l, k, 3)
+        end if
         write(unit_num, '(8(e14.7,1x))') radial_bins(l), radial_bins(l+1), &
              ((float(k)-1.)/cfg%mu_scale)-1., (float(k)/cfg%mu_scale)-1.0, &
-             N2(l, k, 3), N3(l, k, 3), N2(l, k, 3) / N3(l, k, 3)
+             N2(l, k, 3), N3(l, k, 3), xi
       end do
     end do
     close(unit_num)
