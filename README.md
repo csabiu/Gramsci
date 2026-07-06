@@ -131,6 +131,16 @@ from `zeta`). Requirements: coordinates spanning one box period,
 Combining `-box` with `-ran` is also allowed: distances are periodic and the
 usual catalogue estimators are used.
 
+For **redshift-space data** the 4PCF disconnected (Gaussian) term is
+subtracted anisotropically: the internal 2PCF pass also measures the
+quadrupole and hexadecapole ξ₂(r), ξ₄(r) (plane-parallel line of sight along
+z in a box; midpoint line of sight in survey mode with `-nmu > 1`), and
+`zeta_disc` includes the line-of-sight orientation covariance of each edge
+pairing, `ξ₀ξ₀ + ξ₂ξ₂L₂(cosθ)/5 + ξ₄ξ₄L₄(cosθ)/9`, with θ the opposite-edge
+angle fixed by the bin geometry. For real-space data ξ₂ ≈ ξ₄ ≈ 0 and this
+reduces to the usual isotropic product. The parity-odd channel involves no
+disconnected term and is unaffected.
+
 ## Output
 
 Every output file is whitespace-delimited with a one-line header; the bin edges

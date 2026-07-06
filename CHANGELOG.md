@@ -3,6 +3,36 @@
 Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
 *ApJS* **242**, 29 (2019), [arXiv:1901.00296](https://arxiv.org/abs/1901.00296).
 
+## [2.2.0] — 2026-07-06
+
+### Added
+- **Anisotropic (RSD-aware) disconnected-4PCF subtraction.** In redshift
+  space the Gaussian term of the 4PCF is not the product of isotropic ξ's:
+  the line-of-sight angles of the two edges in each complementary pairing
+  co-vary because both edges are rigidly attached to the same tetrahedron.
+  By the Legendre addition theorem the orientation-averaged term is
+  `ξ₀ξ₀ + ξ₂ξ₂L₂(cosθ)/5 + ξ₄ξ₄L₄(cosθ)/9`, with θ the opposite-edge angle
+  fixed by the six side lengths. The internal 2PCF pass now also measures
+  ξ₂(r) and ξ₄(r) — pair Legendre sums are accumulated at graph
+  construction, where the full-precision pair μ exists (plane-parallel z
+  line of sight in `-box` mode; midpoint line of sight in survey mode with
+  `-nmu > 1`) — and `zeta_disc`/`zeta_conn` include the multipole terms.
+  For real-space data ξ₂ ≈ ξ₄ ≈ 0 and the estimator reduces exactly to the
+  previous isotropic subtraction; the parity-odd channel has no
+  disconnected term and is unchanged. Applies to all three builds.
+  Verified against an independent pair-count + addition-theorem
+  computation on a z-squashed clustered box (agreement ≤ 4×10⁻⁷ over all
+  configurations; correction ~10% of `zeta_disc` on that field), and the
+  1/5, 1/9 coefficients against direct Monte-Carlo orientation averaging.
+- `tests/run_correlation_tests.py`: anisotropic disconnected-subtraction
+  regression test (`generate_aniso_box` field).
+
+### Fixed
+- Periodic-mode graph fill now clamps the distance-bin index: the neighbor
+  filter compares squared distances, and sqrt rounding could land a pair
+  exactly on `rmax`, producing an out-of-range bin (found by adversarial
+  review of 2.1.0).
+
 ## [2.1.0] — 2026-07-04
 
 ### Added

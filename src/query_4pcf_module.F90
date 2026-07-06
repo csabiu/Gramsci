@@ -241,9 +241,13 @@ contains
     if (.not. allocated(DD_2pcf)) allocate(DD_2pcf(cfg%nbins))
     if (.not. allocated(RR_2pcf)) allocate(RR_2pcf(cfg%nbins))
     if (.not. allocated(xi_2pcf)) allocate(xi_2pcf(cfg%nbins))
+    if (.not. allocated(xi2_2pcf)) allocate(xi2_2pcf(cfg%nbins))
+    if (.not. allocated(xi4_2pcf)) allocate(xi4_2pcf(cfg%nbins))
     DD_2pcf = 0.0d0
     RR_2pcf = 0.0d0
     xi_2pcf = 0.0d0
+    xi2_2pcf = 0.0d0
+    xi4_2pcf = 0.0d0
 
     if (cfg%rank == 0) print *, 'Computing internal 2PCF for disconnected subtraction'
 
@@ -293,10 +297,29 @@ contains
       end if
     end do
 
+    ! Anisotropic disconnected subtraction: xi_ell = (2*ell+1) * S_ell / RR,
+    ! with S_ell the pair Legendre sums accumulated in create_graph.  Under
+    ! the signed-weight convention S_ell is already the correlation-only
+    ! part (the uniform term integrates to zero against L_ell); same in
+    ! analytic mode, where no "-1" appears for ell > 0.
+    if (cfg%disc_rsd) then
+      do bin_idx = 1, cfg%nbins
+        if (RR_2pcf(bin_idx) /= 0.0d0) then
+          xi2_2pcf(bin_idx) = 5.0d0 * sum_pair_l2(bin_idx) / RR_2pcf(bin_idx)
+          xi4_2pcf(bin_idx) = 9.0d0 * sum_pair_l4(bin_idx) / RR_2pcf(bin_idx)
+        end if
+      end do
+    end if
+
     if (cfg%rank == 0) then
       print *, 'Internal 2PCF computed for disconnected subtraction:'
       do bin_idx = 1, cfg%nbins
-        print '("  bin ",i3,": xi = ",e14.7)', bin_idx, xi_2pcf(bin_idx)
+        if (cfg%disc_rsd) then
+          print '("  bin ",i3,": xi0 = ",e14.7,"  xi2 = ",e14.7,"  xi4 = ",e14.7)', &
+            bin_idx, xi_2pcf(bin_idx), xi2_2pcf(bin_idx), xi4_2pcf(bin_idx)
+        else
+          print '("  bin ",i3,": xi = ",e14.7)', bin_idx, xi_2pcf(bin_idx)
+        end if
       end do
     end if
 
@@ -694,6 +717,55 @@ contains
   end subroutine query_graph_4pcf
 
   ! ---------------------------------------------------------------------------
+  ! Disconnected (Gaussian) 4PCF for one canonical bin 6-tuple: the sum over
+  ! the 3 complementary edge pairings of the orientation-averaged product
+  ! <xi(r_a, mu_a) xi(r_b, mu_b)>.  Because the two opposite edges are rigidly
+  ! attached to the same tetrahedron, their line-of-sight angles co-vary;
+  ! by the Legendre addition theorem the average is
+  !   xi0*xi0 + xi2*xi2 * L2(ct)/5 + xi4*xi4 * L4(ct)/9
+  ! with ct the cosine of the inter-edge angle, fixed by the six side
+  ! lengths (evaluated at bin centres):  e12.e34 = (r14^2+r23^2-r13^2-r24^2)/2.
+  ! xi2/xi4 are zero unless cfg%disc_rsd accumulated pair multipoles, in
+  ! which case this reduces to the isotropic product subtraction.
+  ! ---------------------------------------------------------------------------
+  function zeta_disc_config(b) result(disc)
+    integer, intent(in) :: b(6)
+    real(kdkind) :: disc
+    real(kdkind) :: rc(6), rc2(6), ct, l2ct, l4ct
+    integer :: k, ea, eb
+    ! Complementary edge pairings: (1,6)=(12,34), (2,5)=(13,24), (3,4)=(14,23)
+    integer, parameter :: PAIR_A(3) = [1, 2, 3]
+    integer, parameter :: PAIR_B(3) = [6, 5, 4]
+
+    do k = 1, 6
+      rc(k)  = 0.5d0 * (radial_bins(b(k)) + radial_bins(b(k) + 1))
+      rc2(k) = rc(k) * rc(k)
+    end do
+
+    disc = 0.0d0
+    do k = 1, 3
+      select case (k)
+      case (1)   ! edges (1,2) & (3,4)
+        ct = (rc2(3) + rc2(4) - rc2(2) - rc2(5)) / (2.0d0 * rc(1) * rc(6))
+      case (2)   ! edges (1,3) & (2,4)
+        ct = (rc2(3) + rc2(4) - rc2(1) - rc2(6)) / (2.0d0 * rc(2) * rc(5))
+      case (3)   ! edges (1,4) & (2,3)
+        ct = (rc2(2) + rc2(5) - rc2(1) - rc2(6)) / (2.0d0 * rc(3) * rc(4))
+      end select
+      ! Bin centres of a degenerate config can slightly violate |ct| <= 1
+      ct = max(-1.0d0, min(1.0d0, ct))
+      l2ct = 1.5d0 * ct * ct - 0.5d0
+      l4ct = 4.375d0 * ct**4 - 3.75d0 * ct * ct + 0.375d0
+
+      ea = b(PAIR_A(k))
+      eb = b(PAIR_B(k))
+      disc = disc + xi_2pcf(ea) * xi_2pcf(eb) &
+           + xi2_2pcf(ea) * xi2_2pcf(eb) * l2ct / 5.0d0 &
+           + xi4_2pcf(ea) * xi4_2pcf(eb) * l4ct / 9.0d0
+    end do
+  end function zeta_disc_config
+
+  ! ---------------------------------------------------------------------------
   ! Write 4PCF parity results to output file.
   ! ---------------------------------------------------------------------------
   subroutine write_4pcf_results()
@@ -756,10 +828,9 @@ contains
           - zeta3_internal(bintable(b4, b5, b6, 1))
       end if
 
-      ! Disconnected 4PCF: 3 complementary edge pairings (parity-even)
-      zeta_disc = xi_2pcf(b1) * xi_2pcf(b6) &
-                + xi_2pcf(b2) * xi_2pcf(b5) &
-                + xi_2pcf(b3) * xi_2pcf(b4)
+      ! Disconnected 4PCF: 3 complementary edge pairings (parity-even),
+      ! including the redshift-space multipole covariance when available.
+      zeta_disc = zeta_disc_config([b1, b2, b3, b4, b5, b6])
 
       ! Connected even channel: subtract disconnected (which is parity-even).
       ! zeta_even = N4/R4 is already the total 4PCF (no "-1"; see no-parity
@@ -840,10 +911,9 @@ contains
 
       ! Disconnected 4PCF: 3 complementary edge pairings
       ! {(1,2),(3,4)} = {b1,b6}, {(1,3),(2,4)} = {b2,b5}, {(1,4),(2,3)} = {b3,b4}
-      ! Invariant under S4 vertex permutations
-      zeta_disc = xi_2pcf(b1) * xi_2pcf(b6) &
-                + xi_2pcf(b2) * xi_2pcf(b5) &
-                + xi_2pcf(b3) * xi_2pcf(b4)
+      ! Invariant under S4 vertex permutations; includes the redshift-space
+      ! multipole covariance terms when available.
+      zeta_disc = zeta_disc_config([b1, b2, b3, b4, b5, b6])
 
       ! Connected 4PCF: total minus disconnected.  zeta = N4/R4 with signed
       ! weights is already the total 4PCF (it vanishes for an unclustered

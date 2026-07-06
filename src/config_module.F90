@@ -43,6 +43,11 @@ module config_module
     ! Power sums of the normalized data weights (set in read_files_2),
     ! used for the analytic pair/triple/quadruple weight normalizations.
     real(kdkind) :: sw2 = 0.0d0, sw3 = 0.0d0, sw4 = 0.0d0
+    ! Accumulate pair Legendre multipoles (L2, L4 of the pair mu) during
+    ! graph construction, for the anisotropic disconnected-4PCF subtraction.
+    ! In a periodic box the line of sight is plane-parallel (z axis); in
+    ! survey mode it is the pair midpoint direction (requires -nmu > 1).
+    logical :: disc_rsd = .false.
     character(len=2000) :: file1 = '', file2 = '', ranfile = ''
     character(len=2000) :: output_file = 'result.txt'
     ! MPI state
@@ -74,6 +79,11 @@ module config_module
   integer, allocatable :: orbit_mult_4pcf(:)
   ! Internal 2PCF for disconnected 4PCF subtraction
   real(kdkind), allocatable :: DD_2pcf(:), RR_2pcf(:), xi_2pcf(:)
+  ! Pair Legendre-multipole sums (accumulated in create_graph when
+  ! cfg%disc_rsd) and the resulting xi_2 / xi_4 multipoles, used for the
+  ! anisotropic disconnected-4PCF subtraction in redshift space.
+  real(kdkind), allocatable :: sum_pair_l2(:), sum_pair_l4(:)
+  real(kdkind), allocatable :: xi2_2pcf(:), xi4_2pcf(:)
   ! Internal connected 3PCF per config (analytic mode, 4PCF subtraction)
   real(kdkind), allocatable :: zeta3_internal(:)
 
@@ -105,6 +115,7 @@ contains
     cfg%sw2 = 0.0d0
     cfg%sw3 = 0.0d0
     cfg%sw4 = 0.0d0
+    cfg%disc_rsd = .false.
   end subroutine default_params
 
   subroutine parseOptions()
@@ -257,6 +268,16 @@ contains
         end if
       end if
     end if
+
+    ! Anisotropic disconnected-4PCF subtraction: needs a per-pair mu, which
+    ! exists in a periodic box (plane-parallel z line of sight) or in survey
+    ! mode when RSD (-nmu > 1) is on.  Costs a few percent at graph build.
+    cfg%disc_rsd = (cfg%four_pcf .or. cfg%four_pcf_parity) .and. &
+                   (cfg%periodic .or. cfg%RSD)
+    if (cfg%disc_rsd .and. cfg%rank == cfg%master) then
+      print *, '4PCF: accumulating pair multipoles (xi_2, xi_4) for the'
+      print *, '      anisotropic disconnected-term subtraction'
+    end if
   end subroutine parseOptions
 
   ! Parse the -box argument: either a single side length L (cubic box)
@@ -368,6 +389,10 @@ contains
     if (allocated(DD_2pcf)) deallocate(DD_2pcf)
     if (allocated(RR_2pcf)) deallocate(RR_2pcf)
     if (allocated(xi_2pcf)) deallocate(xi_2pcf)
+    if (allocated(sum_pair_l2)) deallocate(sum_pair_l2)
+    if (allocated(sum_pair_l4)) deallocate(sum_pair_l4)
+    if (allocated(xi2_2pcf)) deallocate(xi2_2pcf)
+    if (allocated(xi4_2pcf)) deallocate(xi4_2pcf)
     if (allocated(weights)) deallocate(weights)
     if (allocated(radial_bins)) deallocate(radial_bins)
   end subroutine deallocate_arrays

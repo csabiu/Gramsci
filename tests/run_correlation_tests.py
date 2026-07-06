@@ -4,6 +4,7 @@ import math
 import numpy as np
 from generate_test_fields import (generate_pairs, generate_regular_tetra,
                                   generate_chiral_tetra, generate_uniform_box,
+                                  generate_aniso_box,
                                   RMIN, RMAX, NBINS, R0, BOX_SIZE, N_RAND, SEED)
 
 def run(cmd):
@@ -324,6 +325,95 @@ def test_analytic_randoms(bindir):
     print("  Test PASSED")
 
 
+def test_aniso_disconnected(bindir):
+    """Test 5: anisotropic (RSD-aware) disconnected-4PCF subtraction.
+
+    A z-squashed blob field in a periodic box has a strong quadrupole
+    xi_2(r).  The zeta_disc column must equal the orientation-averaged
+    Gaussian term
+        sum_pairings [ xi0*xi0 + xi2*xi2*L2(ct)/5 + xi4*xi4*L4(ct)/9 ]
+    with xi_ell measured here independently by direct minimum-image pair
+    counting and ct the opposite-edge angle cosine from the bin centres.
+    """
+    print('\n=== Test: Anisotropic disconnected 4PCF subtraction ===')
+
+    gramsci = os.path.join(bindir, 'gramsci')
+    box = 200.0
+    gal_file = 'tmp_aniso.gal'
+    out4 = 'tmp_aniso.4pcf'
+    generate_aniso_box(300, 20, box, 8.0, 3.0, SEED + 7, gal_file)
+    run(f"{gramsci} -gal {gal_file} -rmin {RMIN} -rmax {RMAX} -nbins {NBINS} "
+        f"-box {box:g} -out {out4} -4pcf")
+
+    # Independent xi_ell by direct min-image pair counting (each pair once)
+    pts = np.loadtxt(gal_file)[:, :3]
+    n = len(pts)
+    edges = np.linspace(RMIN, RMAX, NBINS + 1)
+    s0 = np.zeros(NBINS)
+    s2 = np.zeros(NBINS)
+    s4 = np.zeros(NBINS)
+    for i in range(0, n, 500):
+        d = pts[i:i + 500, None, :] - pts[None, :, :]
+        d -= box * np.round(d / box)
+        r = np.sqrt((d ** 2).sum(-1))
+        once = np.arange(i, min(i + 500, n))[:, None] < np.arange(n)[None, :]
+        sel = once & (r > RMIN) & (r < RMAX)
+        mu2 = (d[..., 2][sel] / r[sel]) ** 2
+        b = np.minimum(NBINS - 1,
+                       ((r[sel] - RMIN) / (RMAX - RMIN) * NBINS).astype(int))
+        np.add.at(s0, b, 1.0)
+        np.add.at(s2, b, 1.5 * mu2 - 0.5)
+        np.add.at(s4, b, 4.375 * mu2 ** 2 - 3.75 * mu2 + 0.375)
+    rr = (n ** 2 - n) / 2 * (4 * np.pi / 3) \
+        * (edges[1:] ** 3 - edges[:-1] ** 3) / box ** 3
+    xi0 = s0 / rr - 1
+    xi2 = 5 * s2 / rr
+    xi4 = 9 * s4 / rr
+    assert np.max(np.abs(xi2)) > 0.3, \
+        f"test field should have a strong quadrupole, got xi2 = {xi2}"
+
+    d4 = np.loadtxt(out4, skiprows=1)
+    rc_all = 0.5 * (edges[:-1] + edges[1:])
+    dr = (RMAX - RMIN) / NBINS
+    bidx = np.rint((d4[:, 0:12:2] - RMIN) / dr).astype(int)  # 0-based b1..b6
+
+    def leg2(x):
+        return 1.5 * x * x - 0.5
+
+    def leg4(x):
+        return 4.375 * x ** 4 - 3.75 * x ** 2 + 0.375
+
+    disc_py = np.zeros(len(d4))
+    disc_iso = np.zeros(len(d4))
+    for row in range(len(d4)):
+        b = bidx[row]
+        rc = rc_all[b]
+        rc2 = rc ** 2
+        cts = [(rc2[2] + rc2[3] - rc2[1] - rc2[4]) / (2 * rc[0] * rc[5]),
+               (rc2[2] + rc2[3] - rc2[0] - rc2[5]) / (2 * rc[1] * rc[4]),
+               (rc2[1] + rc2[4] - rc2[0] - rc2[5]) / (2 * rc[2] * rc[3])]
+        for (ea, eb, ct) in [(0, 5, cts[0]), (1, 4, cts[1]), (2, 3, cts[2])]:
+            ct = min(1.0, max(-1.0, ct))
+            disc_py[row] += (xi0[b[ea]] * xi0[b[eb]]
+                             + xi2[b[ea]] * xi2[b[eb]] * leg2(ct) / 5
+                             + xi4[b[ea]] * xi4[b[eb]] * leg4(ct) / 9)
+            disc_iso[row] += xi0[b[ea]] * xi0[b[eb]]
+
+    disc_f = d4[:, 15]
+    err = np.abs(disc_py - disc_f) / np.maximum(np.abs(disc_py), 1e-3)
+    assert np.max(err) < 1e-4, \
+        f"zeta_disc mismatch vs independent computation: max rel {np.max(err):.2e}"
+    print(f"  zeta_disc matches independent computation "
+          f"(max rel diff {np.max(err):.2e}, {len(d4)} configs)")
+    corr = np.median(np.abs(disc_py - disc_iso))
+    assert corr > 0.01, \
+        "anisotropic correction should be active on this field"
+    print(f"  anisotropic correction active: median |disc - disc_iso| = {corr:.4f}")
+
+    _cleanup(gal_file, out4)
+    print("  Test PASSED")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -435,6 +525,7 @@ def main():
     test_regular_tetra_connected(bindir)
     test_chiral_parity(bindir)
     test_analytic_randoms(bindir)
+    test_aniso_disconnected(bindir)
 
     print('\n========================================')
     print('All correlation tests passed')

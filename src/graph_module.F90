@@ -34,6 +34,8 @@ contains
     integer(int8), allocatable :: rescen(:)
     integer :: c, ncenters, nf, sx, sy, sz, ntotal, iend_clamped
     real(kdkind) :: centers(3, 8), shift(3)
+    integer :: bin_m
+    real(kdkind) :: mu2, wpair
 
     ntotal = cfg%num_data + cfg%num_rand
     ! The drivers call create_graph(1, 999) for the timing estimate even when
@@ -43,12 +45,24 @@ contains
     if (cfg%periodic) allocate(rescen(ntotal))
     store_phi = cfg%four_pcf_parity
 
+    ! Pair Legendre-multipole sums for the anisotropic disconnected-4PCF
+    ! subtraction.  Accumulated here because this is the only place the
+    ! full-precision pair mu exists; each hub is visited exactly once across
+    ! the drivers' probe (1..999) and main (1000..) sweeps, so no reset.
+    if (.not. allocated(sum_pair_l2)) then
+      allocate(sum_pair_l2(cfg%nbins), sum_pair_l4(cfg%nbins))
+      sum_pair_l2 = 0.0d0
+      sum_pair_l4 = 0.0d0
+    end if
+
     !$OMP PARALLEL DO schedule(dynamic) &
     !$OMP& private(i, j, k, vec_dist, neighbor_pt, current_pt, mid_pt, work_vec, &
     !$OMP&         nn1, nn2, nnode, resultsb, rescen, theta, mu1_local, &
     !$OMP&         dx, dy, dz, theta_sph, phi_sph, i_theta, i_phi, &
-    !$OMP&         c, ncenters, nf, sx, sy, sz, centers, shift) &
-    !$OMP& shared(active_kd_tree, output, points, cfg, store_phi, ntotal, iend_clamped)
+    !$OMP&         c, ncenters, nf, sx, sy, sz, centers, shift, bin_m, mu2, wpair) &
+    !$OMP& shared(active_kd_tree, output, points, weights, buffer, cfg, store_phi, &
+    !$OMP&        ntotal, iend_clamped) &
+    !$OMP& reduction(+: sum_pair_l2, sum_pair_l4)
     do i = istart, iend_clamped
 
       current_pt = points(:, i)
@@ -143,6 +157,18 @@ contains
           output(i)%dist(k) = int(min(cfg%nbins, max(1, j)), int8)
           output(i)%id(k) = resultsb(k)%idx
 
+          if (cfg%disc_rsd .and. buffer(i) /= 1) then
+            ! Plane-parallel line of sight (z axis): mu of the min-image pair.
+            dz = points(3, resultsb(k)%idx) - centers(3, rescen(k))
+            mu2 = dz * dz / resultsb(k)%dis
+            wpair = weights(i) * weights(resultsb(k)%idx)
+            bin_m = int(output(i)%dist(k))
+            sum_pair_l2(bin_m) = sum_pair_l2(bin_m) &
+              + wpair * (1.5d0 * mu2 - 0.5d0)
+            sum_pair_l4(bin_m) = sum_pair_l4(bin_m) &
+              + wpair * (4.375d0 * mu2 * mu2 - 3.75d0 * mu2 + 0.375d0)
+          end if
+
           if (store_phi) then
             neighbor_pt = points(:, resultsb(k)%idx)
             dx = neighbor_pt(1) - centers(1, rescen(k))
@@ -193,6 +219,18 @@ contains
           output(i)%dist(k) = int(floor((vec_dist - cfg%rmin) * cfg%inv_delta_r) + 1, int8)
         end if
         output(i)%id(k) = resultsb(j)%idx
+
+        ! Survey mode: disc_rsd implies cfg%RSD, so theta (the midpoint-LOS
+        ! pair mu) was computed above.
+        if (cfg%disc_rsd .and. buffer(i) /= 1) then
+          mu2 = theta * theta
+          wpair = weights(i) * weights(resultsb(j)%idx)
+          bin_m = int(output(i)%dist(k))
+          sum_pair_l2(bin_m) = sum_pair_l2(bin_m) &
+            + wpair * (1.5d0 * mu2 - 0.5d0)
+          sum_pair_l4(bin_m) = sum_pair_l4(bin_m) &
+            + wpair * (4.375d0 * mu2 * mu2 - 3.75d0 * mu2 + 0.375d0)
+        end if
 
         ! Compute and store direction pixel for 4PCF parity
         if (store_phi) then

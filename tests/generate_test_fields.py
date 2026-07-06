@@ -182,3 +182,20 @@ def generate_uniform_box(n_points, box_size, seed, gal_file):
     positions = rng.uniform(0, box_size, size=(n_points, 3))
     weights = np.ones(n_points)
     _write_catalog(gal_file, positions, weights)
+
+
+def generate_aniso_box(n_blobs, per_blob, box_size, sigma_xy, sigma_z, seed,
+                       gal_file):
+    """Generate a clustered catalog with anisotropic (z-squashed) blobs.
+
+    The z-axis flattening imprints a strong quadrupole xi_2(r) (RSD-like
+    anisotropy with a plane-parallel line of sight), used to test the
+    anisotropic disconnected-4PCF subtraction.
+    """
+    rng = np.random.default_rng(seed)
+    centers = rng.uniform(0, box_size, size=(n_blobs, 3))
+    offsets = rng.normal(size=(n_blobs, per_blob, 3)) \
+        * np.array([sigma_xy, sigma_xy, sigma_z])
+    positions = (centers[:, None, :] + offsets).reshape(-1, 3) % box_size
+    weights = np.ones(len(positions))
+    _write_catalog(gal_file, positions, weights)
