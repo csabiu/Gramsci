@@ -223,7 +223,7 @@ contains
     end if
 
     unit_num = 30
-    open(unit_num, file=trim(cfg%output_file), status='unknown')
+    open(unit_num, file=trim(mode_output_file('3pcf')), status='unknown')
     if (cfg%RSD) then
       write(unit_num, *) 'r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, mu min, mu max, NNN, RRR, 3pcf (zeta)'
     else
@@ -277,7 +277,7 @@ contains
     end if
 
     unit_num = 30
-    open(unit_num, file=trim(cfg%output_file), status='unknown')
+    open(unit_num, file=trim(mode_output_file('equi')), status='unknown')
     do l = 1, cfg%nbins
       do k = 1, cfg%nmu
         if (cfg%analytic) then

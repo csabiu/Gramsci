@@ -3,6 +3,19 @@
 Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
 *ApJS* **242**, 29 (2019), [arXiv:1901.00296](https://arxiv.org/abs/1901.00296).
 
+## [2.4.0] — 2026-07-12
+
+### Added
+- **Combined query modes.** Several of `-2pcf`/`-3pcf`/`-equi`/`-4pcf`/
+  `-4pcfp` may now be requested in one run: the KD-tree and neighbor graph
+  (usually the dominant cost) are built once, every query starts from
+  freshly zeroed accumulators, and with more than one mode each result is
+  written to `<out>.<mode>` (a single mode keeps the exact `-out` name).
+  This replaces the 2.3.0 rule that rejected combined flags — that rule
+  fixed the cross-contamination but forced one full graph build per
+  statistic. Combined outputs are verified byte-identical to the
+  corresponding single-mode runs (CPU regression test added).
+
 ## [2.3.0] — 2026-07-12
 
 ### Fixed

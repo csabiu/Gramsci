@@ -37,6 +37,9 @@ module config_module
     ! When true, the 3PCF write routine stores zeta3_internal (per config)
     ! for the 4PCF connected-part subtraction instead of writing a file.
     logical :: internal_3pcf = .false.
+    ! More than one query mode requested: each mode writes to
+    ! <output_file>.<mode> instead of sharing output_file.
+    logical :: multi_mode = .false.
     real(kdkind) :: boxsize(3) = 0.0d0
     ! Power sums of the normalized data weights (set in read_files_2),
     ! used for the analytic pair/triple/quadruple weight normalizations.
@@ -208,14 +211,23 @@ contains
     end do
 
     ! --- Post-parse validation ---
-    ! Query modes are mutually exclusive: they all accumulate into the shared
-    ! N2/N3 arrays (never reset between queries, so combining them would
-    ! cross-contaminate the counts) and write to the same output file.
-    if (count([cfg%two_pcf, cfg%three_pcf, cfg%three_pcf_eq, &
-               cfg%four_pcf, cfg%four_pcf_parity]) /= 1) then
-      print *, 'ERROR: specify exactly one query mode (-2pcf | -3pcf | -equi | -4pcf | -4pcfp)'
-      stop 1
-    end if
+    ! Query modes may be combined (the graph is built once and each query
+    ! starts from freshly zeroed accumulators).  With more than one mode the
+    ! outputs go to <output_file>.<mode> so they cannot clobber each other.
+    block
+      integer :: n_modes
+      n_modes = count([cfg%two_pcf, cfg%three_pcf, cfg%three_pcf_eq, &
+                       cfg%four_pcf, cfg%four_pcf_parity])
+      if (n_modes == 0) then
+        print *, 'ERROR: specify at least one query mode (-2pcf | -3pcf | -equi | -4pcf | -4pcfp)'
+        stop 1
+      end if
+      cfg%multi_mode = n_modes > 1
+      if (cfg%multi_mode .and. cfg%rank == cfg%master) then
+        print *, 'Multiple query modes: writing one output file per mode', &
+                 ' (' // trim(cfg%output_file) // '.<mode>)'
+      end if
+    end block
     if (cfg%nbins <= 0) then
       print *, 'ERROR: -nbins must be specified and > 0'
       stop 1
@@ -356,12 +368,14 @@ contains
     print *, '               Uses minimum-image separations; without -ran the'
     print *, '               RR/RRR/RRRR counts are computed analytically'
     print *, ' '
-    print *, 'QUERY MODES:'
+    print *, 'QUERY MODES (combinable; the graph is built once per run):'
     print *, '       -2pcf   2-point correlation function'
     print *, '       -3pcf   3-point correlation function (all configs)'
     print *, '       -equi   3-point correlation function (equilateral only)'
     print *, '       -4pcf   4-point correlation function (all configs)'
     print *, '       -4pcfp  4-point correlation function (all configs + parity)'
+    print *, '       With one mode the result goes to -out exactly; with'
+    print *, '       several, each mode writes to <out>.<mode> (e.g. res.3pcf)'
     print *, ' '
   end subroutine print_help
 
@@ -419,6 +433,18 @@ contains
     if (allocated(weights)) deallocate(weights)
     if (allocated(radial_bins)) deallocate(radial_bins)
   end subroutine deallocate_arrays
+
+  ! Output filename for one query mode: with a single mode this is exactly
+  ! -out; with combined modes each result goes to <output_file>.<mode>.
+  function mode_output_file(mode) result(fname)
+    character(len=*), intent(in) :: mode
+    character(len=2000) :: fname
+    if (cfg%multi_mode) then
+      fname = trim(cfg%output_file) // '.' // trim(mode)
+    else
+      fname = cfg%output_file
+    end if
+  end function mode_output_file
 
   character(len=20) function str(k)
     integer, intent(in) :: k

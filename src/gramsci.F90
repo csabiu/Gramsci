@@ -153,7 +153,13 @@ program Ngramsci
       print *, 'NOTE: using legacy binary-search kernels (GRAMSCI_BSEARCH set)'
   end block
 
-  if (cfg%two_pcf) call query_graph_2pcf(1, cfg%num_data + cfg%num_rand)
+  ! Each query mode starts from freshly zeroed shared accumulators so that
+  ! combined modes (-2pcf -3pcf ...) cannot cross-contaminate.
+  if (cfg%two_pcf) then
+    N2 = 0.0d0
+    N3 = 0.0d0
+    call query_graph_2pcf(1, cfg%num_data + cfg%num_rand)
+  end if
 
   ! Internal 2PCF: needed for the 4PCF disconnected term and, in analytic
   ! (-box, no -ran) mode, for the 3PCF/equilateral estimator subtraction.
@@ -164,13 +170,19 @@ program Ngramsci
   end if
 
   if (cfg%three_pcf) then
+    N2 = 0.0d0
+    N3 = 0.0d0
     if (use_bsearch) then
       call query_graph_3pcf_all_bsearch(1, cfg%num_data + cfg%num_rand)
     else
       call query_graph_3pcf_all(1, cfg%num_data + cfg%num_rand)
     end if
   end if
-  if (cfg%three_pcf_eq) call query_graph_equilateral_triangle(1, cfg%num_data + cfg%num_rand)
+  if (cfg%three_pcf_eq) then
+    N2 = 0.0d0
+    N3 = 0.0d0
+    call query_graph_equilateral_triangle(1, cfg%num_data + cfg%num_rand)
+  end if
 
   ! Analytic 4PCF: internal 3PCF pass storing the connected zeta3 per config
   ! (zeta3_internal) for the 4PCF estimator subtraction.  N2/N3 are cleared

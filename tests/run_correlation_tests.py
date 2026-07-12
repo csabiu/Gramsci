@@ -325,6 +325,45 @@ def test_analytic_randoms(bindir):
     print("  Test PASSED")
 
 
+def test_combined_modes(bindir):
+    """Test 6: combined query modes share one graph build.
+
+    Running -2pcf -3pcf -equi -4pcf together must produce per-mode output
+    files (<out>.<mode>) that are byte-identical to the corresponding
+    single-mode runs, and the single-mode runs must keep the exact -out name.
+    """
+    print('\n=== Test: Combined query modes ===')
+
+    gramsci = os.path.join(bindir, 'gramsci')
+    box = 200.0
+    gal_file = 'tmp_uniform.gal'
+    generate_uniform_box(6000, box, SEED, gal_file)
+    base = f"-gal {gal_file} -rmin {RMIN} -rmax {RMAX} -nbins {NBINS} -box {box:g}"
+
+    modes = ['2pcf', '3pcf', 'equi', '4pcf']
+    for m in modes:
+        run(f"{gramsci} {base} -out tmp_single.{m} -{m}")
+    flags = ' '.join(f'-{m}' for m in modes)
+    run(f"{gramsci} {base} -out tmp_combined {flags}")
+
+    for m in modes:
+        combined = f'tmp_combined.{m}'
+        single = f'tmp_single.{m}'
+        assert os.path.exists(combined), f"combined run did not write {combined}"
+        with open(combined) as fc, open(single) as fs:
+            assert fc.read() == fs.read(), \
+                f"combined-mode {m} output differs from the single-mode run"
+        print(f"  {m}: combined output identical to single-mode run")
+
+    # a combined run must not also write the bare -out name
+    assert not os.path.exists('tmp_combined'), \
+        "combined run should only write suffixed outputs"
+
+    _cleanup(gal_file, *[f'tmp_single.{m}' for m in modes],
+             *[f'tmp_combined.{m}' for m in modes])
+    print("  Test PASSED")
+
+
 def test_aniso_disconnected(bindir):
     """Test 5: anisotropic (RSD-aware) disconnected-4PCF subtraction.
 
@@ -525,6 +564,7 @@ def main():
     test_regular_tetra_connected(bindir)
     test_chiral_parity(bindir)
     test_analytic_randoms(bindir)
+    test_combined_modes(bindir)
     test_aniso_disconnected(bindir)
 
     print('\n========================================')

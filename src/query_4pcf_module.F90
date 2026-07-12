@@ -802,7 +802,7 @@ contains
     end if
 
     unit_num = 40
-    open(unit_num, file=trim(cfg%output_file), status='unknown')
+    open(unit_num, file=trim(mode_output_file('4pcfp')), status='unknown')
     write(unit_num, *) 'r12min r12max r13min r13max r14min r14max ', &
                        'r23min r23max r24min r24max r34min r34max ', &
                        'NNNN RRRR zeta_even NNNN_odd RRRR_odd zeta_odd ', &
@@ -871,7 +871,7 @@ contains
     end do
     close(unit_num)
 
-    if (cfg%rank == 0) print *, '4PCF parity results written to ', trim(cfg%output_file)
+    if (cfg%rank == 0) print *, '4PCF parity results written to ', trim(mode_output_file('4pcfp'))
   end subroutine write_4pcf_results
 
   ! ---------------------------------------------------------------------------
@@ -891,7 +891,7 @@ contains
     end if
 
     unit_num = 40
-    open(unit_num, file=trim(cfg%output_file), status='unknown')
+    open(unit_num, file=trim(mode_output_file('4pcf')), status='unknown')
     write(unit_num, *) 'r12min r12max r13min r13max r14min r14max ', &
                        'r23min r23max r24min r24max r34min r34max ', &
                        'NNNN RRRR zeta zeta_disc zeta_conn'
@@ -949,7 +949,7 @@ contains
     end do
     close(unit_num)
 
-    if (cfg%rank == 0) print *, '4PCF results written to ', trim(cfg%output_file)
+    if (cfg%rank == 0) print *, '4PCF results written to ', trim(mode_output_file('4pcf'))
   end subroutine write_4pcf_results_noparity
 
   ! ---------------------------------------------------------------------------

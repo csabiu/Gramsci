@@ -106,6 +106,16 @@ bin/gramsci -gal galaxies.dat -ran randoms.dat \
 | `-3pcf` / `-equi`   | 3PCF (all triangles) / equilateral only                  |
 | `-4pcf` / `-4pcfp`  | 4PCF / 4PCF with parity decomposition                    |
 
+Query modes can be **combined** in one run — the KD-tree and neighbor graph
+(usually the dominant cost) are built once and every query reuses them. With a
+single mode the result goes exactly to `-out`; with several, each mode writes
+to `<out>.<mode>`:
+
+```sh
+bin/gramsci -gal data.gal -ran data.ran -rmin 5 -rmax 30 -nbins 10 \
+            -2pcf -3pcf -4pcf -out result   # -> result.2pcf, result.3pcf, result.4pcf
+```
+
 ### Periodic boxes — no randoms needed
 
 For a regular geometry such as a periodic simulation box, pass `-box L`

@@ -59,8 +59,8 @@ contains
     end if
 
     unit_num = 30
-    print *, 'writing output to: ', trim(cfg%output_file)
-    open(unit_num, file=trim(cfg%output_file), status='unknown')
+    print *, 'writing output to: ', trim(mode_output_file('2pcf'))
+    open(unit_num, file=trim(mode_output_file('2pcf')), status='unknown')
     write(unit_num, *) 'r min, r max, mu min, mu max, NN, RR, 2pcf (xi)'
 
     do l = 1, cfg%nbins

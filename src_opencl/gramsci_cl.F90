@@ -135,16 +135,28 @@ program gramsci_cl
   N2 = 0.0d0
   N3 = 0.0d0
 
+  ! Each query mode starts from freshly zeroed shared accumulators so that
+  ! combined modes (-2pcf -3pcf ...) cannot cross-contaminate.
+
   ! 2PCF: CPU (O(N*m), fast; not worth GPU overhead)
-  if (cfg%two_pcf) call query_graph_2pcf(1, cfg%num_data + cfg%num_rand)
+  if (cfg%two_pcf) then
+    N2 = 0.0d0
+    N3 = 0.0d0
+    call query_graph_2pcf(1, cfg%num_data + cfg%num_rand)
+  end if
 
   ! Equilateral 3PCF with RSD: CPU only; isotropic runs on GPU below
-  if (cfg%three_pcf_eq .and. cfg%RSD) &
+  if (cfg%three_pcf_eq .and. cfg%RSD) then
+    N2 = 0.0d0
+    N3 = 0.0d0
     call query_graph_equilateral_triangle(1, cfg%num_data + cfg%num_rand)
+  end if
 
   ! RSD (anisotropic) 3PCF: GPU version does not support nmu>1, run on CPU now
   if (cfg%three_pcf .and. cfg%RSD) then
     if (cfg%rank == 0) print *, 'RSD 3PCF: running on CPU'
+    N2 = 0.0d0
+    N3 = 0.0d0
     call query_graph_3pcf_all(1, cfg%num_data + cfg%num_rand)
   end if
 
@@ -174,11 +186,17 @@ program gramsci_cl
   if (cfg%rank == 0) print *, 'Jagged graph freed; using CSR from here'
 
   ! ---- Phase 2: GPU (OpenCL) queries using CSR ----
-  if (cfg%three_pcf .and. .not. cfg%RSD) &
+  if (cfg%three_pcf .and. .not. cfg%RSD) then
+    N2 = 0.0d0
+    N3 = 0.0d0
     call query_graph_3pcf_cl(1, cfg%num_data + cfg%num_rand)
+  end if
 
-  if (cfg%three_pcf_eq .and. .not. cfg%RSD) &
+  if (cfg%three_pcf_eq .and. .not. cfg%RSD) then
+    N2 = 0.0d0
+    N3 = 0.0d0
     call query_graph_equilateral_cl(1, cfg%num_data + cfg%num_rand)
+  end if
 
   if (cfg%four_pcf) then
     allocate(N4(cfg%n_configs_4pcf, 1))
