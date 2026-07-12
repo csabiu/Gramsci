@@ -6,6 +6,60 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
 ## [2.3.0] — 2026-07-12
 
 ### Fixed
+- **RSD equilateral 3PCF (`-equi` with `-nmu > 1`) was fully broken**: the
+  RSD branch never accumulated the random-triple denominator, so every
+  output row was `zeta = NNN/0` = Inf. It now accumulates `N3` per mu bin
+  exactly like the all-configurations RSD query; the mu-summed counts
+  reproduce the isotropic run to machine precision.
+- **Query modes are now mutually exclusive** (exactly one of
+  `-2pcf | -3pcf | -equi | -4pcf | -4pcfp`). They all accumulate into the
+  shared N2/N3 arrays without resetting between queries and write to the
+  same output file, so combining flags silently cross-contaminated the
+  counts and clobbered the earlier output.
+- **Catalogue reading is now line-based and validated.** The old
+  record-based reader always consumed four values, so a 3-column file
+  (weight omitted — a format the docs advertise) consumed two lines per
+  point and silently left half the arrays uninitialized after a one-line
+  warning; a `#` header made the line counter stop at zero points. Files
+  may now be `x y z w` or `x y z` (weight = 1), blank/`#` lines are
+  skipped, and any malformed line is a hard error with its line number.
+- **Non-periodic graph build hardened against edge-of-bin rounding**: the
+  fill pass now uses exactly the same squared-distance filter as the
+  sizing pass (a sqrt-based filter could disagree at values rounding onto
+  `rmax²` and overflow the per-node arrays), and the radial bin index is
+  clamped into `[1, nbins]` as the periodic pass already did — an
+  unclamped index could reach `nbins+1` and corrupt memory (~1e-16 per
+  pair, but production runs do 10¹¹⁺ pairs).
+- **`find_normal` no longer takes the square root of a negative number**
+  for near-line-of-sight edge pairs (previously `int(floor(NaN))` —
+  undefined behaviour); the argument is clamped and the computation
+  promoted from single to double precision.
+- **4PCF Burnside bound computed in int64**: `nbins**6` overflowed default
+  integers at `nbins >= 36`, turning the allocation size negative; it now
+  fails with a clear message if the config count exceeds the int32 range.
+- **CLI parsing**: options longer than 6 characters are no longer silently
+  truncated (`-nbinsfoo` used to parse as `-nbins`); a trailing option
+  with no value and unparseable numeric values are clean errors; added
+  validation for `-rmax <= -rmin` and `-log` with `-rmin <= 0`.
+- All Fortran error paths exit with a **nonzero status** (plain `stop`
+  returns 0, which made failures indistinguishable from success for
+  callers); the Python wrapper accordingly treats any nonzero exit as an
+  error and surfaces the captured Fortran message instead of a generic
+  "did not produce output".
+- **Python wrapper**: `compute_3pcf(..., nmu>=2)` no longer silently
+  misparses the 11-column RSD output (mu-bin edges were returned as
+  counts and raw counts as zeta); `TwoPCFResult` exposes the mu-bin
+  columns; calling `compute_*` with neither `randoms_pos` nor `box`
+  raises immediately instead of returning Inf/NaN; `randoms_weights`
+  defaults to 1 when only `randoms_pos` is given; relative `GRAMSCI_BIN`
+  paths are resolved against the caller's cwd (the subprocess runs in a
+  temp dir).
+- Non-short-circuit `.and.` conditions that indexed one-past-the-end
+  (insertion sorts, 4PCF merge-walk seek) restructured — they aborted
+  under `-fcheck=bounds`.
+- `kdtree2_r_count_around_point` leaked its query-vector allocation on
+  every call (once per hub when `rmin > 0`).
+- The 2PCF output header mislabelled the mu-edge columns as `r2 min/max`.
 - **OpenCL: Kahan compensated accumulation in all four kernels.** The fp32
   per-column partials stopped registering increments once a column passed
   ~2/ε ≈ 1.7×10⁷ tuples (for unit weights) — a one-sided bias that silently
@@ -32,7 +86,6 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   of 0.
 - OpenACC driver: the graph-build ETA printed total process CPU time
   instead of the probe duration.
-
 - `make clean` in `tests/` removes the `tmp_*`/`bench_*` scratch files
   (the recipe referenced an undefined variable and was a no-op);
   `src/Makefile` no longer installs a stale binary when the link step

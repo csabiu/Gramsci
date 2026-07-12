@@ -95,7 +95,7 @@ contains
 
     if (.not. cfg%half_graph) then
       print *, 'ERROR: GPU 4PCF requires half_graph=.true.'
-      stop
+      stop 1
     end if
 
     if (cfg%rank == 0) print *, 'Performing 4PCF (all configs, GPU lmat)'
@@ -424,7 +424,7 @@ contains
 
     if (.not. cfg%half_graph) then
       print *, 'ERROR: GPU 4PCF parity requires half_graph=.true.'
-      stop
+      stop 1
     end if
 
     if (cfg%rank == 0) print *, 'Performing 4PCF parity (all configs, GPU lmat)'

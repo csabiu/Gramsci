@@ -34,7 +34,7 @@ contains
     integer(int8), allocatable :: rescen(:)
     integer :: c, ncenters, nf, sx, sy, sz, ntotal, iend_clamped
     real(kdkind) :: centers(3, 8), shift(3)
-    integer :: bin_m
+    integer :: bin_m, jbin
     real(kdkind) :: mu2, wpair
 
     ntotal = cfg%num_data + cfg%num_rand
@@ -59,7 +59,7 @@ contains
     !$OMP& private(i, j, k, vec_dist, neighbor_pt, current_pt, mid_pt, work_vec, &
     !$OMP&         nn1, nn2, nnode, resultsb, rescen, theta, mu1_local, &
     !$OMP&         dx, dy, dz, theta_sph, phi_sph, i_theta, i_phi, &
-    !$OMP&         c, ncenters, nf, sx, sy, sz, centers, shift, bin_m, mu2, wpair) &
+    !$OMP&         c, ncenters, nf, sx, sy, sz, centers, shift, bin_m, jbin, mu2, wpair) &
     !$OMP& shared(active_kd_tree, output, points, weights, buffer, cfg, store_phi, &
     !$OMP&        ntotal, iend_clamped) &
     !$OMP& reduction(+: sum_pair_l2, sum_pair_l4)
@@ -187,16 +187,17 @@ contains
         k = nnode
       else
 
-      ! Pass 2: fill with the same filter.
+      ! Pass 2: fill with EXACTLY the same squared-distance filter as pass 1
+      ! (a sqrt-based filter here could disagree with pass 1 at values whose
+      ! square rounds onto rmin^2/rmax^2 and overflow the arrays sized above).
       k = 0
       do j = nn1 + 1, nn2
         if (cfg%half_graph .and. resultsb(j)%idx <= i) cycle
+        if (resultsb(j)%dis <= cfg%rmin * cfg%rmin) cycle
+        if (resultsb(j)%dis >= cfg%rmax * cfg%rmax) cycle
         neighbor_pt = points(:, resultsb(j)%idx)
 
         vec_dist = sqrt(resultsb(j)%dis)
-
-        if (vec_dist <= cfg%rmin) cycle
-        if (vec_dist >= cfg%rmax) cycle
         k = k + 1
 
         if (cfg%RSD) then
@@ -213,11 +214,15 @@ contains
           output(i)%mu(k) = 1
         end if
 
+        ! Clamp the bin like the periodic pass: the filter compared squared
+        ! distances, so sqrt/reciprocal rounding can still push the index to
+        ! 0 or nbins+1 at the bin-range edges.
         if (cfg%logbins) then
-          output(i)%dist(k) = int(floor((log10(vec_dist) - cfg%log_rmin) * cfg%inv_delta_r) + 1, int8)
+          jbin = int(floor((log10(vec_dist) - cfg%log_rmin) * cfg%inv_delta_r)) + 1
         else
-          output(i)%dist(k) = int(floor((vec_dist - cfg%rmin) * cfg%inv_delta_r) + 1, int8)
+          jbin = int(floor((vec_dist - cfg%rmin) * cfg%inv_delta_r)) + 1
         end if
+        output(i)%dist(k) = int(min(cfg%nbins, max(1, jbin)), int8)
         output(i)%id(k) = resultsb(j)%idx
 
         ! Survey mode: disc_rsd implies cfg%RSD, so theta (the midpoint-LOS

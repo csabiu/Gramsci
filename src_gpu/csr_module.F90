@@ -254,7 +254,7 @@ contains
     if (wedges < 50000000_int64) then
       print '("ERROR: insufficient device memory: ",i0," B free, ",i0," B scratch")', &
             freeb, extra_bytes
-      stop
+      stop 1
     end if
   end function csr_edge_window
 

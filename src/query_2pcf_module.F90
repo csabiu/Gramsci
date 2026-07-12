@@ -61,7 +61,7 @@ contains
     unit_num = 30
     print *, 'writing output to: ', trim(cfg%output_file)
     open(unit_num, file=trim(cfg%output_file), status='unknown')
-    write(unit_num, *) 'r1 min, r1 max, r2 min, r2 max, NN, RR, 2pcf (xi)'
+    write(unit_num, *) 'r min, r max, mu min, mu max, NN, RR, 2pcf (xi)'
 
     do l = 1, cfg%nbins
       do k = 1, cfg%nmu

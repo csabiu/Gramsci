@@ -79,7 +79,7 @@ contains
 
     if (cfg%RSD) then
       print *, 'ERROR: query_graph_3pcf_gpu called with RSD mode; caller must route to CPU'
-      stop
+      stop 1
     end if
 
     if (cfg%rank == 0) print *, 'Performing 3PCF (all configurations, GPU bsearch)'
@@ -278,7 +278,7 @@ contains
 
     if (cfg%RSD) then
       print *, 'ERROR: query_graph_equilateral_gpu called with RSD mode; caller must route to CPU'
-      stop
+      stop 1
     end if
 
     if (cfg%rank == 0) print *, 'Performing equilateral 3PCF (GPU bsearch)'

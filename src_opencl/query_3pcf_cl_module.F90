@@ -64,7 +64,7 @@ contains
 
     if (cfg%RSD) then
       print *, 'ERROR: query_graph_3pcf_cl called with RSD mode; route to CPU'
-      stop
+      stop 1
     end if
     if (cfg%rank == 0) print *, 'Performing 3PCF (all configurations, OpenCL bsearch)'
 
@@ -170,7 +170,7 @@ contains
 
     if (cfg%RSD) then
       print *, 'ERROR: query_graph_equilateral_cl called with RSD mode; route to CPU'
-      stop
+      stop 1
     end if
     if (cfg%rank == 0) print *, 'Performing equilateral 3PCF (OpenCL bsearch)'
 

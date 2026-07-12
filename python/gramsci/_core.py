@@ -9,14 +9,34 @@ _DEFAULT_BINARY = _REPO_ROOT / 'bin' / 'gramsci'
 
 
 def _find_binary(binary):
-    if binary is not None:
-        return str(binary)
-    env = os.environ.get('GRAMSCI_BIN')
-    if env:
-        return env
-    if _DEFAULT_BINARY.exists():
-        return str(_DEFAULT_BINARY)
-    return 'gramsci'
+    if binary is None:
+        binary = os.environ.get('GRAMSCI_BIN')
+    if binary is None:
+        if _DEFAULT_BINARY.exists():
+            return str(_DEFAULT_BINARY)
+        return 'gramsci'  # resolved via PATH
+    binary = str(binary)
+    # The subprocess runs with cwd set to a temp dir, so a relative path
+    # (e.g. GRAMSCI_BIN=bin/gramsci) must be anchored to the caller's cwd.
+    if os.sep in binary or os.path.exists(binary):
+        return os.path.abspath(binary)
+    return binary
+
+
+def _prepare_randoms(randoms_pos, randoms_weights, box, what):
+    """Validate the randoms/box combination and default the weights to 1."""
+    if randoms_pos is None:
+        if box is None:
+            raise ValueError(
+                f"either randoms_pos or box is required: without them the "
+                f"{what} denominator is identically zero and the result "
+                f"would be Inf/NaN"
+            )
+        return None, None
+    randoms_pos = np.asarray(randoms_pos, dtype=np.float64)
+    if randoms_weights is None:
+        randoms_weights = np.ones(len(randoms_pos))
+    return randoms_pos, randoms_weights
 
 
 def _write_catalog(path, positions, weights):
@@ -27,7 +47,7 @@ def _write_catalog(path, positions, weights):
 
 def _run(args, cwd):
     result = subprocess.run(args, capture_output=True, text=True, cwd=cwd)
-    if result.returncode not in (0, 1):  # Fortran STOP returns 0 or 1
+    if result.returncode != 0:  # gramsci error paths exit with a nonzero code
         raise RuntimeError(
             f"gramsci exited with code {result.returncode}:\n"
             f"{result.stdout[-2000:]}\n{result.stderr[-500:]}"
@@ -35,11 +55,11 @@ def _run(args, cwd):
     return result.stdout
 
 
-def _load(path):
+def _load(path, stdout=''):
     if not os.path.exists(path):
         raise FileNotFoundError(
-            f"gramsci did not produce output at {path}. "
-            "Check that the binary ran successfully."
+            f"gramsci did not produce output at {path}. Binary output:\n"
+            f"{stdout[-2000:]}"
         )
     return np.loadtxt(path, skiprows=1)
 
@@ -65,20 +85,28 @@ class TwoPCFResult:
     ----------
     r : midpoint of each radial bin
     r_min, r_max : bin edges
+    mu_min, mu_max : mu-bin edges (constant when nmu = 1)
     NN, RR : weighted pair counts
     xi : correlation function estimate
+    nmu : number of mu bins
+
+    With nmu > 1 the arrays have nbins*nmu entries, ordered with the nmu
+    mu bins consecutive within each radial bin.
     """
     def __init__(self, data):
         # columns: r_min r_max mu_min mu_max NN RR xi
-        self.r_min = data[:, 0]
-        self.r_max = data[:, 1]
-        self.NN    = data[:, 4]
-        self.RR    = data[:, 5]
-        self.xi    = data[:, 6]
-        self.r     = 0.5 * (self.r_min + self.r_max)
+        self.r_min  = data[:, 0]
+        self.r_max  = data[:, 1]
+        self.mu_min = data[:, 2]
+        self.mu_max = data[:, 3]
+        self.NN     = data[:, 4]
+        self.RR     = data[:, 5]
+        self.xi     = data[:, 6]
+        self.r      = 0.5 * (self.r_min + self.r_max)
+        self.nmu    = len(np.unique(self.mu_min))
 
     def __repr__(self):
-        return f"TwoPCFResult(nbins={len(self.r)})"
+        return f"TwoPCFResult(nbins={len(self.r) // self.nmu}, nmu={self.nmu})"
 
 
 class ThreePCFResult:
@@ -88,17 +116,34 @@ class ThreePCFResult:
     ----------
     r1, r2, r3 : midpoints of triangle side bins
     r{1,2,3}_min, r{1,2,3}_max : bin edges
+    mu_min, mu_max : mu-bin edges (present only when nmu > 1)
     NNN, RRR : weighted triplet counts
     zeta : 3PCF estimate  zeta = NNN / RRR
-    n_configs : number of distinct (r1,r2,r3) configurations
+    n_configs : number of rows (triangle configs, x nmu when nmu > 1)
     """
     def __init__(self, data):
+        # isotropic: 9 columns; RSD (nmu > 1): 11 columns with the mu-bin
+        # edges inserted at columns 6-7
         self.r1_min = data[:, 0]; self.r1_max = data[:, 1]
         self.r2_min = data[:, 2]; self.r2_max = data[:, 3]
         self.r3_min = data[:, 4]; self.r3_max = data[:, 5]
-        self.NNN    = data[:, 6]
-        self.RRR    = data[:, 7]
-        self.zeta   = data[:, 8]
+        if data.shape[1] == 11:
+            self.mu_min = data[:, 6]
+            self.mu_max = data[:, 7]
+            self.NNN    = data[:, 8]
+            self.RRR    = data[:, 9]
+            self.zeta   = data[:, 10]
+        elif data.shape[1] == 9:
+            self.mu_min = None
+            self.mu_max = None
+            self.NNN    = data[:, 6]
+            self.RRR    = data[:, 7]
+            self.zeta   = data[:, 8]
+        else:
+            raise ValueError(
+                f"unexpected 3PCF output with {data.shape[1]} columns "
+                "(expected 9, or 11 with nmu > 1)"
+            )
         self.r1     = 0.5 * (self.r1_min + self.r1_max)
         self.r2     = 0.5 * (self.r2_min + self.r2_max)
         self.r3     = 0.5 * (self.r3_min + self.r3_max)
@@ -181,6 +226,8 @@ def compute_2pcf(positions, weights, randoms_pos=None, randoms_weights=None,
     TwoPCFResult
     """
     binary = _find_binary(binary)
+    randoms_pos, randoms_weights = _prepare_randoms(
+        randoms_pos, randoms_weights, box, 'RR')
     with tempfile.TemporaryDirectory() as tmp:
         gal = os.path.join(tmp, 'data.gal')
         out = os.path.join(tmp, 'result.out')
@@ -195,8 +242,8 @@ def compute_2pcf(positions, weights, randoms_pos=None, randoms_weights=None,
             args += ['-ran', ran]
         if box is not None:
             args += ['-box', _box_arg(box)]
-        _run(args, tmp)
-        return TwoPCFResult(_load(out))
+        stdout = _run(args, tmp)
+        return TwoPCFResult(_load(out, stdout))
 
 
 def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
@@ -222,6 +269,8 @@ def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
     ThreePCFResult
     """
     binary = _find_binary(binary)
+    randoms_pos, randoms_weights = _prepare_randoms(
+        randoms_pos, randoms_weights, box, 'RRR')
     with tempfile.TemporaryDirectory() as tmp:
         gal = os.path.join(tmp, 'data.gal')
         out = os.path.join(tmp, 'result.out')
@@ -236,8 +285,8 @@ def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
             args += ['-ran', ran]
         if box is not None:
             args += ['-box', _box_arg(box)]
-        _run(args, tmp)
-        return ThreePCFResult(_load(out))
+        stdout = _run(args, tmp)
+        return ThreePCFResult(_load(out, stdout))
 
 
 def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
@@ -266,6 +315,8 @@ def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
         .zeta_odd    — parity-odd 4PCF  (parity=True)
     """
     binary = _find_binary(binary)
+    randoms_pos, randoms_weights = _prepare_randoms(
+        randoms_pos, randoms_weights, box, 'RRRR')
     with tempfile.TemporaryDirectory() as tmp:
         gal = os.path.join(tmp, 'data.gal')
         out = os.path.join(tmp, 'result.out')
@@ -281,5 +332,5 @@ def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
             args += ['-ran', ran]
         if box is not None:
             args += ['-box', _box_arg(box)]
-        _run(args, tmp)
-        return FourPCFResult(_load(out), parity=parity)
+        stdout = _run(args, tmp)
+        return FourPCFResult(_load(out, stdout), parity=parity)

@@ -1359,6 +1359,8 @@ include 'mpif.h'
 
     nfound = sr%nfound
 
+    deallocate (sr%qv)
+
     return
   end function kdtree2_r_count_around_point
 

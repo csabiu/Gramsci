@@ -18,7 +18,7 @@ contains
 
     if (.not. cfg%half_graph) then
       print *, 'ERROR: merge-walk 3PCF requires half_graph=.true.'
-      stop
+      stop 1
     end if
     if (cfg%rank == 0) print *, 'Performing 3pcf (all configurations, merge-walk)'
     if (cfg%rank == 0) print *, 'begin querying the graph'
@@ -168,6 +168,9 @@ contains
 
           if (cfg%RSD) then
             call find_normal(output(i)%mu(k1), output(i)%mu(k2), ind2)
+            if (i > cfg%num_data .and. id1 > cfg%num_data .and. id2 > cfg%num_data) then
+              N3(ind1, ind2, 3) = N3(ind1, ind2, 3) - weights(i) * weights(id1) * weights(id2)
+            end if
             N2(ind1, ind2, 3) = N2(ind1, ind2, 3) + weights(i) * weights(id1) * weights(id2)
           else
             if (i > cfg%num_data .and. id1 > cfg%num_data .and. id2 > cfg%num_data) then

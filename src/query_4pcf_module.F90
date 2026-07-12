@@ -1,6 +1,6 @@
 module query_4pcf_module
   use kdtree2_precision_module
-  use iso_fortran_env, only: int8
+  use iso_fortran_env, only: int8, int64
   use config_module
   use graph_utils_module, only: find_dist
   implicit none
@@ -125,18 +125,32 @@ contains
   ! ---------------------------------------------------------------------------
   subroutine create_4pcf_binlookup()
     integer :: b1, b2, b3, b4, b5, b6, n, k, n_configs_upper
+    integer(int64) :: n64, upper64
     integer :: bins(6), perm_bins(6), canon(6)
     integer :: canon_parity, best_parity
     logical :: is_less
 
     n = cfg%nbins
+
+    ! Burnside upper bound on the orbit count, in int64: n**6 overflows
+    ! default integers already at nbins = 36 (36^6 > 2^31), which would turn
+    ! the allocation size negative.  In practice memory runs out well before
+    ! the int32 ceiling, but fail with an explanation rather than a crash.
+    n64 = int(n, int64)
+    upper64 = (n64**6 + 9_int64 * n64**4 + 14_int64 * n64**2) / 24_int64
+    if (upper64 > int(huge(1), int64)) then
+      print '("ERROR: -nbins ",i0," gives ~",i0," 4PCF configurations; reduce -nbins")', &
+        n, upper64
+      stop 1
+    end if
+    n_configs_upper = int(upper64)
+
     allocate(bintable6(n, n, n, n, n, n))
     bintable6 = 0
     cfg%n_configs_4pcf = 0
 
-    ! Pre-allocate canon_bins_4pcf using Burnside upper bound so we can
+    ! Pre-allocate canon_bins_4pcf using the Burnside upper bound so we can
     ! record the canonical tuple for each new orbit as we encounter it.
-    n_configs_upper = (n**6 + 9*n**4 + 14*n**2) / 24
     allocate(canon_bins_4pcf(6, n_configs_upper))
     allocate(orbit_mult_4pcf(n_configs_upper))
     orbit_mult_4pcf = 0
@@ -444,7 +458,7 @@ contains
 
     if (.not. cfg%half_graph) then
       print *, 'ERROR: merge-walk 4PCF parity requires half_graph=.true.'
-      stop
+      stop 1
     end if
     if (cfg%rank == 0) print *, 'Performing 4PCF parity (all configurations, merge-walk)'
     if (cfg%rank == 0) print *, 'begin querying the graph'
@@ -483,7 +497,9 @@ contains
             alpha = a + 1
             beta  = b + 1
             gamma = 1
-            do while (gamma <= nn_id2 .and. output(id2)%id(gamma) <= id2)
+            ! Fortran .and. does not short-circuit: guard the id() access
+            do while (gamma <= nn_id2)
+              if (output(id2)%id(gamma) > id2) exit
               gamma = gamma + 1
             end do
 
@@ -635,7 +651,7 @@ contains
 
     if (.not. cfg%half_graph) then
       print *, 'ERROR: merge-walk 4PCF requires half_graph=.true.'
-      stop
+      stop 1
     end if
     if (cfg%rank == 0) print *, 'Performing 4PCF (all configurations, merge-walk)'
     if (cfg%rank == 0) print *, 'begin querying the graph'
@@ -670,7 +686,9 @@ contains
             alpha = a + 1
             beta  = b + 1
             gamma = 1
-            do while (gamma <= nn_id2 .and. output(id2)%id(gamma) <= id2)
+            ! Fortran .and. does not short-circuit: guard the id() access
+            do while (gamma <= nn_id2)
+              if (output(id2)%id(gamma) > id2) exit
               gamma = gamma + 1
             end do
 

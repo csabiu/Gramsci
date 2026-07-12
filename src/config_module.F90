@@ -120,7 +120,8 @@ contains
     use extension, only: getArgument, nArguments
     implicit none
     integer(kind=4) :: i, n
-    character(len=6) :: opt
+    integer :: ios
+    character(len=32) :: opt
     character(len=2000) :: arg
 
     n = nArguments()
@@ -129,7 +130,7 @@ contains
       print *, 'Not enough input parameters. Please read the following help info'
       print *, ' '
       call print_help()
-      stop
+      stop 1
     end if
 
     i = 1
@@ -137,40 +138,44 @@ contains
       call getArgument(i, opt)
       select case (opt)
       case ('-gal')
-        call getArgument(i+1, arg)
+        call get_value(arg)
         cfg%file1 = trim(arg)
         i = i + 2
       case ('-ran')
         cfg%rancat = .true.
-        call getArgument(i+1, arg)
+        call get_value(arg)
         cfg%file2 = trim(arg)
         i = i + 2
       case ('-out')
-        call getArgument(i+1, arg)
+        call get_value(arg)
         cfg%output_file = trim(arg)
         i = i + 2
       case ('-rmin')
-        call getArgument(i+1, arg)
-        read(arg, *) cfg%rmin
+        call get_value(arg)
+        read(arg, *, iostat=ios) cfg%rmin
+        call check_numeric()
         i = i + 2
       case ('-rmax')
-        call getArgument(i+1, arg)
-        read(arg, *) cfg%rmax
+        call get_value(arg)
+        read(arg, *, iostat=ios) cfg%rmax
+        call check_numeric()
         i = i + 2
       case ('-nbins')
-        call getArgument(i+1, arg)
-        read(arg, *) cfg%nbins
+        call get_value(arg)
+        read(arg, *, iostat=ios) cfg%nbins
+        call check_numeric()
         i = i + 2
       case ('-nmu')
-        call getArgument(i+1, arg)
-        read(arg, *) cfg%nmu
+        call get_value(arg)
+        read(arg, *, iostat=ios) cfg%nmu
+        call check_numeric()
         if (cfg%nmu >= 2) then
           cfg%RSD = .true.
           if (cfg%rank == cfg%master) print *, 'Anisotropic analysis requested'
         end if
         i = i + 2
       case ('-box')
-        call getArgument(i+1, arg)
+        call get_value(arg)
         call parse_boxsize(trim(arg))
         cfg%periodic = .true.
         i = i + 2
@@ -197,49 +202,65 @@ contains
         cfg%four_pcf_parity = .true.
         i = i + 1
       case default
-        print '("unknown option ",a," ignored")', trim(opt)
-        stop
+        print '("ERROR: unknown option ",a)', trim(opt)
+        stop 1
       end select
     end do
 
     ! --- Post-parse validation ---
+    ! Query modes are mutually exclusive: they all accumulate into the shared
+    ! N2/N3 arrays (never reset between queries, so combining them would
+    ! cross-contaminate the counts) and write to the same output file.
+    if (count([cfg%two_pcf, cfg%three_pcf, cfg%three_pcf_eq, &
+               cfg%four_pcf, cfg%four_pcf_parity]) /= 1) then
+      print *, 'ERROR: specify exactly one query mode (-2pcf | -3pcf | -equi | -4pcf | -4pcfp)'
+      stop 1
+    end if
     if (cfg%nbins <= 0) then
       print *, 'ERROR: -nbins must be specified and > 0'
-      stop
+      stop 1
+    end if
+    if (cfg%rmax <= cfg%rmin) then
+      print *, 'ERROR: -rmax must be greater than -rmin'
+      stop 1
+    end if
+    if (cfg%logbins .and. cfg%rmin <= 0.0d0) then
+      print *, 'ERROR: -log requires -rmin > 0'
+      stop 1
     end if
     if (cfg%nbins > 127) then
       print *, 'ERROR: -nbins must be <= 127 (bin indices stored as int8)'
-      stop
+      stop 1
     end if
     if (cfg%nmu > 127) then
       print *, 'ERROR: -nmu must be <= 127 (mu indices stored as int8)'
-      stop
+      stop 1
     end if
     if (cfg%n_theta_dir * cfg%n_phi_dir > 127) then
       print *, 'ERROR: n_theta_dir * n_phi_dir must be <= 127 (phi pixel stored as int8)'
-      stop
+      stop 1
     end if
 
     ! --- Periodic-box mode validation ---
     if (cfg%periodic) then
       if (any(cfg%boxsize <= 0.0d0)) then
         print *, 'ERROR: -box requires positive box side length(s)'
-        stop
+        stop 1
       end if
       if (cfg%nmu > 1) then
         print *, 'ERROR: -box supports isotropic analysis only (-nmu 1);'
         print *, '       the midpoint line-of-sight mu is not defined in a periodic box'
-        stop
+        stop 1
       end if
       if (cfg%rmax >= 0.5d0 * minval(cfg%boxsize)) then
         print *, 'ERROR: -box requires rmax < L/2 (minimum-image uniqueness)'
-        stop
+        stop 1
       end if
       if ((cfg%three_pcf .or. cfg%three_pcf_eq .or. cfg%four_pcf .or. cfg%four_pcf_parity) &
           .and. cfg%rmax > 0.25d0 * minval(cfg%boxsize)) then
         print *, 'ERROR: 3PCF/4PCF with -box require rmax <= L/4 so that the'
         print *, '       minimum-image side lengths of every tuple are mutually consistent'
-        stop
+        stop 1
       end if
       cfg%analytic = .not. cfg%rancat
       if (cfg%rank == cfg%master) then
@@ -261,6 +282,26 @@ contains
       print *, '4PCF: accumulating pair multipoles (xi_2, xi_4) for the'
       print *, '      anisotropic disconnected-term subtraction'
     end if
+
+  contains
+
+    ! Fetch the value of option opt (argument i+1), erroring out if absent.
+    subroutine get_value(val)
+      character(len=*), intent(out) :: val
+      if (i + 1 > n) then
+        print '("ERROR: option ",a," requires a value")', trim(opt)
+        stop 1
+      end if
+      call getArgument(i + 1, val)
+    end subroutine get_value
+
+    subroutine check_numeric()
+      if (ios /= 0) then
+        print '("ERROR: cannot parse value for option ",a,": ",a)', trim(opt), trim(arg)
+        stop 1
+      end if
+    end subroutine check_numeric
+
   end subroutine parseOptions
 
   ! Parse the -box argument: either a single side length L (cubic box)
@@ -276,7 +317,7 @@ contains
       c2 = c1 + index(arg(c1+1:), ',')
       if (c2 == c1) then
         print *, 'ERROR: -box takes either L or Lx,Ly,Lz'
-        stop
+        stop 1
       end if
       read(arg(:c1-1), *, iostat=ios) cfg%boxsize(1)
       if (ios == 0) read(arg(c1+1:c2-1), *, iostat=ios) cfg%boxsize(2)
@@ -284,7 +325,7 @@ contains
     end if
     if (ios /= 0) then
       print *, 'ERROR: cannot parse -box argument: ', trim(arg)
-      stop
+      stop 1
     end if
   end subroutine parse_boxsize
 

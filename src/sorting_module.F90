@@ -18,7 +18,9 @@ contains
       key_y = y(i)
       key_z = z(i)
       j = i - 1
-      do while (j >= 1 .and. x(j) > key_x)
+      ! Fortran .and. does not short-circuit, so guard x(j) behind the exit
+      do while (j >= 1)
+        if (x(j) <= key_x) exit
         x(j+1) = x(j)
         y(j+1) = y(j)
         z(j+1) = z(j)
@@ -42,7 +44,8 @@ contains
       key_x = x(i)
       key_y = y(i)
       j = i - 1
-      do while (j >= 1 .and. x(j) > key_x)
+      do while (j >= 1)
+        if (x(j) <= key_x) exit
         x(j+1) = x(j)
         y(j+1) = y(j)
         j = j - 1
@@ -67,7 +70,8 @@ contains
       key_z = z(i)
       key_p = p(i)
       j = i - 1
-      do while (j >= 1 .and. x(j) > key_x)
+      do while (j >= 1)
+        if (x(j) <= key_x) exit
         x(j+1) = x(j)
         y(j+1) = y(j)
         z(j+1) = z(j)

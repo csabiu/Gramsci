@@ -76,12 +76,20 @@ contains
     implicit none
     integer(int8), intent(in) :: mu1, mu2
     integer(int8), intent(out) :: mun
-    real :: mu11, mu22
+    ! 2/sqrt(3): normalizes the sqrt below onto [0, 1]
+    real(kdkind), parameter :: TWO_OVER_SQRT3 = 1.1547005383792515d0
+    real(kdkind) :: mu11, mu22, arg
 
-    mu11 = ((mu1 - 0.5) / cfg%mu_scale) - 1.0
-    mu22 = ((mu2 - 0.5) / cfg%mu_scale) - 1.0
+    mu11 = ((real(mu1, kdkind) - 0.5d0) / cfg%mu_scale) - 1.0d0
+    mu22 = ((real(mu2, kdkind) - 0.5d0) / cfg%mu_scale) - 1.0d0
 
-    mun = int(floor((1.1547 * (0.75 - mu11*mu11 - mu22*mu22 + (mu11*mu22))**0.5) * cfg%nmu) + 1, int8)
+    ! For near-line-of-sight edge pairs (|mu| -> 1) the expression can go
+    ! negative (e.g. mu11 = mu22 = 1 gives -0.25); clamp before the sqrt so
+    ! degenerate triangles land deterministically in bin 1 instead of the
+    ! undefined int(NaN).
+    arg = max(0.75d0 - mu11*mu11 - mu22*mu22 + mu11*mu22, 0.0d0)
+
+    mun = int(floor(TWO_OVER_SQRT3 * sqrt(arg) * cfg%nmu) + 1, int8)
     if (mun < 1) mun = 1
     if (mun > cfg%nmu) mun = int(cfg%nmu, int8)
   end subroutine find_normal
