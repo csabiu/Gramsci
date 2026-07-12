@@ -1,0 +1,102 @@
+# GRAMSCI continuous integration.
+#
+# linux: builds the CPU binary, runs the full physics regression suite,
+#        link-checks the OpenCL backend against ocl-icd (no GPU needed for
+#        -version, which exits before cl_init), and syntax-checks the
+#        OpenACC backend with gfortran -fopenacc (nvfortran is unavailable
+#        on hosted runners).
+# macos: same CPU build + regression suite with Homebrew gfortran, plus the
+#        OpenCL build against Apple's framework.
+#
+# The OpenCL numerical validation (src_opencl/validate.sh) needs a real GPU
+# and is not run here — run it locally after touching src_opencl/.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  linux:
+    name: Linux (build + regression tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran ocl-icd-opencl-dev
+          pip install numpy
+
+      - name: Build CPU binary
+        run: make
+
+      - name: Version smoke test
+        run: bin/gramsci -version
+
+      - name: Run regression tests
+        run: cd tests && python3 run_correlation_tests.py
+
+      - name: Build OpenCL binary (compile/link check)
+        run: |
+          make gpu
+          bin/gramsci_cl -version
+
+      - name: Syntax-check OpenACC backend (gfortran -fopenacc)
+        run: |
+          mkdir -p /tmp/gpu_syntax && cd /tmp/gpu_syntax
+          for f in extension kdtree2 node_module sorting_module config_module \
+                   io_module analytic_randoms_module graph_utils_module \
+                   graph_module query_2pcf_module query_3pcf_module \
+                   query_4pcf_module; do
+            gfortran -DGFORTRAN -DDOUBLE -fopenmp -ffree-line-length-none \
+              -fsyntax-only "$GITHUB_WORKSPACE/src/$f.F90"
+          done
+          for f in csr_module query_3pcf_gpu_module query_4pcf_gpu_module \
+                   gramsci_gpu; do
+            gfortran -DGFORTRAN -DDOUBLE -fopenmp -fopenacc \
+              -ffree-line-length-none -fsyntax-only \
+              "$GITHUB_WORKSPACE/src_gpu/$f.F90"
+          done
+
+  macos:
+    name: macOS (build + regression tests)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install toolchain
+        run: |
+          brew list gcc >/dev/null 2>&1 || brew install gcc
+          # the Makefiles invoke plain "gfortran"; make sure the Homebrew
+          # unversioned symlink exists and is on PATH
+          which gfortran || ln -s "$(ls "$(brew --prefix)"/bin/gfortran-* | sort -V | tail -1)" "$(brew --prefix)/bin/gfortran"
+          gfortran --version
+          pip install numpy
+
+      - name: Build CPU binary
+        run: make
+
+      - name: Version smoke test
+        run: bin/gramsci -version
+
+      - name: Run regression tests
+        run: cd tests && python3 run_correlation_tests.py
+
+      - name: Build OpenCL binary (compile/link check)
+        run: |
+          make gpu
+          bin/gramsci_cl -version

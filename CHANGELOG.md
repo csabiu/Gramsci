@@ -22,6 +22,12 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   header is now also a `#` comment (and the equilateral output gains one),
   so `np.loadtxt` reads every output with no `skiprows` needed — existing
   `skiprows=1` calls keep working since the skipped line is a comment.
+- **Continuous integration** (GitHub Actions): every push/PR to master
+  builds the CPU binary and runs the full physics regression suite on
+  Linux and macOS, link-checks the OpenCL backend on both, and
+  syntax-checks the OpenACC backend with `gfortran -fopenacc`. The
+  GPU-dependent numerical validation (`src_opencl/validate.sh`) still
+  needs local hardware.
 
 ## [2.3.0] — 2026-07-12
 

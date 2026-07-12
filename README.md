@@ -4,6 +4,7 @@
 **2-, 3- and 4-point correlation functions** (including the parity-odd 4PCF) of
 3D point sets, built on a graph-database representation of the pair graph.
 
+[![CI](https://github.com/csabiu/Gramsci/actions/workflows/ci.yml/badge.svg)](https://github.com/csabiu/Gramsci/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 [![arXiv](https://img.shields.io/badge/arXiv-1901.00296-b31b1b.svg)](https://arxiv.org/abs/1901.00296)
 
