@@ -16,8 +16,6 @@ module config_module
     real(kdkind) :: mu_scale
     logical :: logbins = .false.
     logical :: RSD = .false.
-    logical :: cut = .false.
-    logical :: DOMPI = .false.
     logical :: rancat = .false.
     logical :: two_pcf = .false.
     logical :: three_pcf = .false.
@@ -50,7 +48,8 @@ module config_module
     logical :: disc_rsd = .false.
     character(len=2000) :: file1 = '', file2 = '', ranfile = ''
     character(len=2000) :: output_file = 'result.txt'
-    ! MPI state
+    ! Process identity: always rank 0 of 1 (kept so the write routines'
+    ! rank guards read uniformly across the CPU/GPU/OpenCL drivers)
     integer :: rank = 0
     integer :: num_tasks = 1
     integer :: master = 0
@@ -91,7 +90,6 @@ contains
 
   subroutine default_params()
     cfg%d = 3
-    cfg%cut = .false.
     cfg%logbins = .false.
     cfg%nbins = 0
     cfg%rmin = 0.0d0
@@ -171,22 +169,11 @@ contains
           if (cfg%rank == cfg%master) print *, 'Anisotropic analysis requested'
         end if
         i = i + 2
-      case ('-cut')
-        call getArgument(i+1, arg)
-        cfg%cut = .true.
-        cfg%file1 = trim(arg)
-        if (cfg%rank == cfg%master) print *, 'Treating input catalogue as subsample'
-        if (cfg%rank == cfg%master) print *, 'will ignore -gal -ran options'
-        cfg%output_file = cfg%file1
-        i = i + 2
       case ('-box')
         call getArgument(i+1, arg)
         call parse_boxsize(trim(arg))
         cfg%periodic = .true.
         i = i + 2
-      case ('-mpi')
-        cfg%DOMPI = .true.
-        i = i + 1
       case ('-log')
         cfg%logbins = .true.
         if (cfg%rank == cfg%master) print *, 'Using logarithmically spaced bins'
@@ -237,10 +224,6 @@ contains
     if (cfg%periodic) then
       if (any(cfg%boxsize <= 0.0d0)) then
         print *, 'ERROR: -box requires positive box side length(s)'
-        stop
-      end if
-      if (cfg%cut) then
-        print *, 'ERROR: -box cannot be combined with -cut (domain decomposition)'
         stop
       end if
       if (cfg%nmu > 1) then
@@ -313,7 +296,7 @@ contains
     print *, '              [-rmin Rmin] [-rmax Rmax] [-nbins Nbins]'
     print *, '              [-nmu Nmu] [-out out_file]'
     print *, '              [-2pcf | -3pcf | -equi | -4pcf | -4pcfp]'
-    print *, '              [-log] [-cut]'
+    print *, '              [-log] [-box L]'
     print *, ' '
     print *, '      eg: gramsci -gal test.gal -ran test.ran -rmin 10.0 -rmax 30.0 -nbins 10 -2pcf'
     print *, ' '
@@ -328,7 +311,6 @@ contains
     print *, '       -nbins  number of radial bins'
     print *, '       -nmu    number of mu bins (enables anisotropic analysis)'
     print *, '       -log    use logarithmic radial binning'
-    print *, '       -cut    use file format with selection cuts'
     print *, '       -box    periodic box side length L (or Lx,Ly,Lz).'
     print *, '               Uses minimum-image separations; without -ran the'
     print *, '               RR/RRR/RRRR counts are computed analytically'

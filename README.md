@@ -36,7 +36,7 @@ On macOS the build auto-detects the SDK for the linker.
 
 ```sh
 git clone <repo-url> gramsci && cd gramsci
-make                    # builds bin/gramsci (+ bin/domain_decomposition)
+make                    # builds bin/gramsci
 pip install -e python   # optional: the Python interface (needs numpy)
 ```
 
@@ -105,9 +105,6 @@ bin/gramsci -gal galaxies.dat -ran randoms.dat \
 | `-2pcf`             | 2-point correlation function                             |
 | `-3pcf` / `-equi`   | 3PCF (all triangles) / equilateral only                  |
 | `-4pcf` / `-4pcfp`  | 4PCF / 4PCF with parity decomposition                    |
-
-For very large catalogues or large `rmax`, `bin/domain_decomposition` splits the
-volume into sub-regions that can be run separately (see [below](#large-catalogues)).
 
 ### Periodic boxes — no randoms needed
 
@@ -191,13 +188,6 @@ build. See [`src_opencl/README.md`](src_opencl/README.md) and
 cd tests && python3 run_correlation_tests.py     # CPU regression tests
 bash ../src_opencl/validate.sh                   # CPU vs OpenCL agreement (if built)
 ```
-
-## <a name="large-catalogues"></a>Large catalogues
-
-`domain_decompose.sh data ran Nregion Rmax` splits the catalogues into `Nregion³`
-spatial sub-regions, reducing the per-region graph RAM. Each region is run
-separately and the results combined afterwards. Useful when the graph would
-otherwise exceed available memory.
 
 ## Repository layout
 

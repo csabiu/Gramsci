@@ -4,32 +4,6 @@ module io_module
   implicit none
 contains
 
-  subroutine count_files()
-    implicit none
-    integer :: ios, unit_num
-    real(kdkind) :: aux
-
-    cfg%num_data = 0
-    if (cfg%DOMPI) cfg%file1 = trim(str(cfg%rank+1)) // '.loadnodes'
-
-    unit_num = 20
-    print *, trim(cfg%file1)
-    open(unit_num, file=trim(cfg%file1), status='old', iostat=ios)
-    if (ios /= 0) then
-      print *, 'ERROR: cannot open file ', trim(cfg%file1)
-      stop
-    end if
-
-    do
-      read(unit_num, *, iostat=ios) aux
-      if (ios /= 0) exit
-      cfg%num_data = cfg%num_data + 1
-    end do
-    close(unit_num)
-
-    if (cfg%rank == 0) print *, 'Preparing to read ', cfg%num_data, 'data points'
-  end subroutine count_files
-
   subroutine count_files_2()
     implicit none
     integer :: ios, unit_num
@@ -68,33 +42,6 @@ contains
     if (cfg%rank == 0) print *, 'Preparing to read ', cfg%num_data, 'data points'
     if (cfg%rank == 0) print *, 'Preparing to read ', cfg%num_rand, 'random points'
   end subroutine count_files_2
-
-  subroutine read_files()
-    implicit none
-    integer :: i, ios, unit_num
-
-    unit_num = 20
-    if (cfg%rank == 0) print *, 'opening ', trim(cfg%file1)
-    open(unit_num, file=trim(cfg%file1), status='old', iostat=ios)
-    if (ios /= 0) then
-      print *, 'ERROR: cannot open file ', trim(cfg%file1)
-      stop
-    end if
-
-    do i = 1, cfg%num_data
-      if (cfg%cut) then
-        read(unit_num, *, iostat=ios) points(1:3, i), weights(i), buffer(i)
-      else
-        read(unit_num, *, iostat=ios) points(1:3, i), weights(i)
-        buffer(i) = 0
-      end if
-      if (ios /= 0) exit
-    end do
-    close(unit_num)
-
-    if (cfg%rank == 0) print *, 'Finished reading data file'
-    if (cfg%rank == 0) print *, 'there are ', cfg%num_data - sum(buffer), ' data points inside buffer'
-  end subroutine read_files
 
   subroutine read_files_2()
     implicit none

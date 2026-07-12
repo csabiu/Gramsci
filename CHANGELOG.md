@@ -33,6 +33,19 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
 - OpenACC driver: the graph-build ETA printed total process CPU time
   instead of the probe duration.
 
+- `make clean` in `tests/` removes the `tmp_*`/`bench_*` scratch files
+  (the recipe referenced an undefined variable and was a no-op);
+  `src/Makefile` no longer installs a stale binary when the link step
+  fails.
+
+### Removed
+- **The MPI/domain-decomposition path (`-cut`, `-mpi`,
+  `bin/domain_decomposition`).** It was broken end-to-end: results were
+  never reduced across ranks (only the master's partial counts were
+  written), and the `-cut` reader took the `gal` column as the halo buffer
+  flag, so region overlaps were double-counted. All three drivers are now
+  single-process (OpenMP/GPU) only.
+
 ## [2.2.0] — 2026-07-06
 
 ### Added

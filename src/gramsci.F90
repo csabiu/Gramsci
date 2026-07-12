@@ -10,33 +10,16 @@ program Ngramsci
   use query_3pcf_module
   use query_4pcf_module
   implicit none
-#ifdef MPI
-  include 'mpif.h'
-#endif
   INCLUDE "omp_lib.h"
 
   type(kdtree2), pointer :: kd_tree
-  integer :: i, j, nn2, thread, threads, ierr
+  integer :: i, j, nn2, thread, threads
   real(kdkind) :: start, finish, rand_val, avg_neighbors
   logical :: use_bsearch
   real(kdkind), allocatable :: sample_vec(:)
-#ifdef MPI
-  integer, dimension(MPI_STATUS_SIZE) :: status
-#endif
 
-  ! ---- MPI Initialization ----
-  cfg%rank = 0
-  cfg%num_tasks = 1
   thread = 0
   threads = 1
-
-#ifdef MPI
-  call MPI_INIT(ierr)
-  call MPI_COMM_RANK(MPI_COMM_WORLD, cfg%rank, ierr)
-  call MPI_COMM_SIZE(MPI_COMM_WORLD, cfg%num_tasks, ierr)
-#endif
-
-  print *, 'node ', cfg%rank, ' of ', cfg%num_tasks, ' checking in...'
 
   ! ---- Configuration ----
   call default_params()
@@ -52,11 +35,7 @@ program Ngramsci
   if (cfg%rank == cfg%master) print *, 'allocated bins'
 
   ! ---- Count data ----
-  if (cfg%cut) then
-    call count_files()
-  else
-    call count_files_2()
-  end if
+  call count_files_2()
 
   ! ---- Allocate data arrays ----
   allocate(points(cfg%d, cfg%num_data + cfg%num_rand))
@@ -80,11 +59,7 @@ program Ngramsci
   end do
 
   ! ---- Read data ----
-  if (cfg%cut) then
-    call read_files()
-  else
-    call read_files_2()
-  end if
+  call read_files_2()
 
   ! ---- Build KD-tree ----
   if (cfg%rank == 0) print *, 'building kd_tree '
@@ -142,7 +117,7 @@ program Ngramsci
   !$ thread = OMP_GET_THREAD_NUM()
   !$OMP END PARALLEL
 
-  if (cfg%rank == cfg%master) print *, 'Code running with ', cfg%num_tasks, ' MPI processes each with ', threads, ' OMP threads'
+  if (cfg%rank == cfg%master) print *, 'Code running with ', threads, ' OMP threads'
 
   call set_kd_tree(kd_tree)
 
@@ -153,7 +128,6 @@ program Ngramsci
   print '("Creating graph will take ~ ",f10.3," minutes.")', &
     (finish - start) * (cfg%num_data + cfg%num_rand) / (60.0 * 1000.0 * threads)
   print *, 'If this takes longer than time to drink a coffee, maybe you should give me more CPUs'
-  print *, 'Or consider decomposing the domain decomposition option with larger N.'
   call create_graph(1000, cfg%num_data + cfg%num_rand)
   call cpu_time(finish)
   print '("Creating the graph took ",f12.3," seconds.")', (finish - start) / threads
@@ -161,9 +135,6 @@ program Ngramsci
   call kdtree2_destroy(kd_tree)
   deallocate(points)
 
-#ifdef MPI
-  call MPI_Barrier(MPI_COMM_WORLD, ierr)
-#endif
   if (cfg%rank == 0) print *, 'finished building node relationships '
 
   ! ---- Query the graph ----
@@ -251,30 +222,10 @@ program Ngramsci
 
   if (cfg%rank == 0) print *, 'finished querying the graph'
 
-#ifdef MPI
-  call MPI_Barrier(MPI_COMM_WORLD, ierr)
-#endif
-  if (cfg%rank == 0) print *, 'collecting results from MPI tasks'
-  if (cfg%rank == 0) print *, 'results collected'
-
-#ifdef MPI
-  call MPI_Barrier(MPI_COMM_WORLD, ierr)
-#endif
-
   call deallocate_arrays()
-
-#ifdef MPI
-  call MPI_Barrier(MPI_COMM_WORLD, ierr)
-  call MPI_FINALIZE(ierr)
-#endif
 
   deallocate(buffer)
 
-  if (cfg%rank == cfg%master) then
-    print *, "Exit... stage left!"
-    stop
-  else
-    stop
-  end if
+  print *, "Exit... stage left!"
 
 end program Ngramsci

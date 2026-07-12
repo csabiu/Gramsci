@@ -8,7 +8,6 @@ FLAGSALWAYS = -DDOUBLE -ffree-line-length-none
 #-O3 -ffast-math
 #FLAGSDEBUG= -g -fbounds-check -O0
 
-#F90=/usr/local/bin/mpif90 -DMPI -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -mtune=intel -faggressive-loop-optimizations -ftree-loop-if-convert
 #F90=gfortran -DGFORTRAN -fopenmp -Ofast -ffast-math -faggressive-loop-optimizations -ftree-loop-if-convert
 F90=gfortran -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -faggressive-loop-optimizations -ftree-loop-if-convert
 
@@ -18,7 +17,6 @@ LDFLAGS=$(if $(SDKPATH),-L$(SDKPATH)/usr/lib,)
 
 # choose debugging or optimization
 FLAGS= ${FLAGSMACHINE} ${FLAGSALWAYS} ${INC} ${LIBS} ${FLAGSOPT}
-MPIFLAGS= ${FLAGSMACHINE} ${FLAGSALWAYS} ${INC} ${LIBS} ${FLAGSOPT}
 
 MY_DIR=`basename ${PWD}`
 #------------------------------------
@@ -29,7 +27,7 @@ MY_DIR=`basename ${PWD}`
 %.o: %.F90
 	$(F90) $(FLAGS) -c $< -o $@
 
-all:	gramsci domain_decomposition
+all:	gramsci
 
 # Module dependency chain
 MODULES = extension.o kdtree2.o node_module.o sorting_module.o \
@@ -39,7 +37,7 @@ MODULES = extension.o kdtree2.o node_module.o sorting_module.o \
           query_4pcf_module.o
 
 gramsci: $(MODULES) gramsci.o
-	${F90} ${FLAGS} ${LDFLAGS} -o gramsci $(MODULES) gramsci.o ; \
+	${F90} ${FLAGS} ${LDFLAGS} -o gramsci $(MODULES) gramsci.o && \
 	mv $@ $(BINDIR)/gramsci
 
 # Explicit dependency rules for module compilation order
@@ -52,10 +50,6 @@ query_2pcf_module.o: kdtree2.o config_module.o analytic_randoms_module.o
 query_3pcf_module.o: kdtree2.o config_module.o graph_utils_module.o analytic_randoms_module.o
 query_4pcf_module.o: kdtree2.o config_module.o graph_utils_module.o analytic_randoms_module.o
 gramsci.o: $(MODULES)
-
-domain_decomposition: domain_decomposition.o
-	${F90} ${FLAGS} ${LDFLAGS} -o domain_decomposition domain_decomposition.o ; \
-	mv $@ $(BINDIR)/domain_decomposition
 
 clean:
 	/bin/rm -f *.o *.mod

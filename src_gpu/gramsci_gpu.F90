@@ -13,33 +13,16 @@ program Ngramsci_gpu
   use query_3pcf_gpu_module
   use query_4pcf_gpu_module
   implicit none
-#ifdef MPI
-  include 'mpif.h'
-#endif
   INCLUDE "omp_lib.h"
 
   type(kdtree2), pointer :: kd_tree
-  integer :: i, j, nn2, thread, threads, ierr
+  integer :: i, j, nn2, thread, threads
   real(kdkind) :: start, finish, rand_val, avg_neighbors
   integer(8) :: wt0, wt1, wt_rate
   real(kdkind), allocatable :: sample_vec(:)
-#ifdef MPI
-  integer, dimension(MPI_STATUS_SIZE) :: status
-#endif
 
-  ! ---- MPI Initialization ----
-  cfg%rank = 0
-  cfg%num_tasks = 1
   thread = 0
   threads = 1
-
-#ifdef MPI
-  call MPI_INIT(ierr)
-  call MPI_COMM_RANK(MPI_COMM_WORLD, cfg%rank, ierr)
-  call MPI_COMM_SIZE(MPI_COMM_WORLD, cfg%num_tasks, ierr)
-#endif
-
-  print *, 'node ', cfg%rank, ' of ', cfg%num_tasks, ' checking in...'
 
   ! ---- Configuration ----
   call default_params()
@@ -55,11 +38,7 @@ program Ngramsci_gpu
   if (cfg%rank == cfg%master) print *, 'allocated bins'
 
   ! ---- Count data ----
-  if (cfg%cut) then
-    call count_files()
-  else
-    call count_files_2()
-  end if
+  call count_files_2()
 
   ! ---- Allocate data arrays ----
   allocate(points(cfg%d, cfg%num_data + cfg%num_rand))
@@ -83,11 +62,7 @@ program Ngramsci_gpu
   end do
 
   ! ---- Read data ----
-  if (cfg%cut) then
-    call read_files()
-  else
-    call read_files_2()
-  end if
+  call read_files_2()
 
   ! ---- Build KD-tree ----
   if (cfg%rank == 0) print *, 'building kd_tree '
@@ -140,8 +115,7 @@ program Ngramsci_gpu
   !$ thread = OMP_GET_THREAD_NUM()
   !$OMP END PARALLEL
 
-  if (cfg%rank == cfg%master) print *, 'Code running with ', cfg%num_tasks, &
-    ' MPI processes each with ', threads, ' OMP threads'
+  if (cfg%rank == cfg%master) print *, 'Code running with ', threads, ' OMP threads'
 
   call set_kd_tree(kd_tree)
 
@@ -160,9 +134,6 @@ program Ngramsci_gpu
   call kdtree2_destroy(kd_tree)
   deallocate(points)
 
-#ifdef MPI
-  call MPI_Barrier(MPI_COMM_WORLD, ierr)
-#endif
   if (cfg%rank == 0) print *, 'finished building node relationships '
 
   ! ---- Phase 1: CPU queries that need the jagged output(:) ----
@@ -247,24 +218,11 @@ program Ngramsci_gpu
 
   call deallocate_csr()
 
-#ifdef MPI
-  call MPI_Barrier(MPI_COMM_WORLD, ierr)
-#endif
   if (cfg%rank == 0) print *, 'finished querying the graph'
-
-#ifdef MPI
-  call MPI_Barrier(MPI_COMM_WORLD, ierr)
-  call MPI_FINALIZE(ierr)
-#endif
 
   call deallocate_arrays()
   deallocate(buffer)
 
-  if (cfg%rank == cfg%master) then
-    print *, "Exit... stage left!"
-    stop
-  else
-    stop
-  end if
+  print *, "Exit... stage left!"
 
 end program Ngramsci_gpu
