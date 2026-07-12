@@ -59,10 +59,14 @@ Graph construction (kd-tree pair finding) always runs on the CPU with OpenMP.
 Apple Silicon reports `CL_DEVICE_DOUBLE_FP_CONFIG == 0` (no `double` in
 kernels), so all device arithmetic is `float`.  To keep accuracy:
 
-- Each work-item accumulates into its **own** partial-histogram column; the
-  columns are summed back into the final counts **in double on the host**.
-  This keeps every individual fp32 accumulator small (no large-sum precision
-  loss) and avoids device atomics entirely (Apple OpenCL has no fp32 atomics).
+- Each work-item accumulates into its **own** partial-histogram column with
+  **Kahan compensated summation** (a paired compensation buffer per partial);
+  the columns are summed back into the final counts **in double on the host**
+  as `sum − comp`.  The error stays O(ε) *independent of the tuple count* —
+  a plain fp32 `+=` would silently stop registering increments once a column
+  passed ~1.7×10⁷ tuples, one-sidedly undercounting the monotone RRR/RRRR
+  channels on production-size runs.  This also avoids device atomics
+  entirely (Apple OpenCL has no fp32 atomics).
 - The 4PCF **parity** chirality sign is precomputed on the host in double (same
   `VOL_DEGEN_TOL` as the CPU code) into a per-pixel-triple sign table and looked
   up in the kernel — so the parity channel is bit-exact in *sign* and only the
@@ -73,9 +77,9 @@ Measured agreement vs. the double-precision CPU reference (test catalog,
 
 | Query        | max relative error vs CPU |
 |--------------|---------------------------|
-| 3PCF, equi   | ~1e-7 (counts), RRR exact |
-| 4PCF         | ~5e-6 (counts)            |
-| 4PCF parity  | ~1e-6 (even & odd)        |
+| 3PCF, equi   | ~1e-8 (counts), RRR exact |
+| 4PCF         | ~1e-7 (counts)            |
+| 4PCF parity  | ~2e-7 (even & odd)        |
 
 For full double precision (e.g. publication runs on very small signals), use
 the CPU build (`src/`) or the NVIDIA OpenACC build (`src_gpu/`).
@@ -88,7 +92,12 @@ results with no error.  Each query therefore runs as **one launch first**, with
 per-work-item completion flags; if the watchdog truncated it, the backend
 **re-zeros and re-runs the query as several shorter interleaved-bucket
 launches** ("single GPU launch hit the watchdog; retrying tiled" is printed).
+The tiled path re-checks the flags after *every* window (the first window is
+sized open-loop, so it can trip the watchdog too), periodically commits
+verified partials to double host accumulators, and on truncation discards the
+uncommitted counts, rewinds to the last commit, and shrinks the window.
 Results are correct either way; only the timing differs.
+(`GRAMSCI_CL_FORCE_TILED=1` forces the tiled path, for testing.)
 
 On Apple's GPU a single *sustained* launch is much faster than many short ones
 (the GPU clock ramps up only under sustained load), so:

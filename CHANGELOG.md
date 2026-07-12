@@ -3,6 +3,36 @@
 Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
 *ApJS* **242**, 29 (2019), [arXiv:1901.00296](https://arxiv.org/abs/1901.00296).
 
+## [2.3.0] — 2026-07-12
+
+### Fixed
+- **OpenCL: Kahan compensated accumulation in all four kernels.** The fp32
+  per-column partials stopped registering increments once a column passed
+  ~2/ε ≈ 1.7×10⁷ tuples (for unit weights) — a one-sided bias that silently
+  undercounted the monotone RRR/RRRR denominator channels on
+  production-size runs, inflating ζ. Each partial buffer now carries a
+  same-size compensation buffer (`kadd` in `kernels.cl`); the host folds in
+  `sum − comp` during its double reduction, keeping the error O(ε)
+  independent of the tuple count. CPU-vs-OpenCL validation agreement
+  tightened from ~10⁻⁴ to ~10⁻⁷ (fp32 ulp) as a side effect.
+- **OpenCL: the tiled watchdog fallback now verifies every launch.**
+  `cl_run_bucketed` bound the per-work-item completion flags but never read
+  them back, and its first window is sized open-loop — so if a tiled launch
+  itself exceeded the GPU watchdog (routine on the hour-scale 4PCF runs the
+  fallback exists for), Apple's OpenCL returned partial results with no
+  error and the dropped counts went undetected. The launcher now reads the
+  flags after every window, periodically commits verified partials to
+  double host accumulators (≤ ~5 s of GPU work ever at risk), and on
+  truncation discards the uncommitted device partials, rewinds to the last
+  committed window, and shrinks the window — truncation costs time, never
+  counts. Set `GRAMSCI_CL_FORCE_TILED=1` to exercise the tiled path
+  regardless of the single-launch outcome (used by `validate.sh` testing).
+- OpenCL: the `CL_DEVICE_DOUBLE_FP_CONFIG` query no longer aborts
+  initialisation on pre-1.2 devices that answer it with an error instead
+  of 0.
+- OpenACC driver: the graph-build ETA printed total process CPU time
+  instead of the probe duration.
+
 ## [2.2.0] — 2026-07-06
 
 ### Added

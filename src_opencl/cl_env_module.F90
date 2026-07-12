@@ -44,7 +44,7 @@ module cl_env_module
   public :: cl_init, cl_shutdown, cl_check
   public :: cl_buf_in_i8, cl_buf_in_i32, cl_buf_in_i64, cl_buf_in_f32
   public :: cl_buf_zeroed_f32, cl_buf_zeroed_i8
-  public :: cl_read_f32, cl_read_i8, cl_write_f32, cl_release
+  public :: cl_read_f32, cl_read_i8, cl_write_f32, cl_write_i8, cl_release
   public :: cl_kernel_get, cl_release_kernel
   public :: cl_arg_mem, cl_arg_i32, cl_arg_i64, cl_arg_f32
   public :: cl_run_1d, cl_run_complete, cl_run_bucketed
@@ -103,7 +103,9 @@ contains
     cl_global_mem    = dev_info_i64(cl_device_h, CL_DEVICE_GLOBAL_MEM_SIZE)
     cl_max_wg        = dev_info_size(cl_device_h, CL_DEVICE_MAX_WORK_GROUP_SIZE)
     cl_compute_units = dev_info_u32(cl_device_h, CL_DEVICE_MAX_COMPUTE_UNITS)
-    fp64cfg          = dev_info_i64(cl_device_h, CL_DEVICE_DOUBLE_FP_CONFIG)
+    ! Pre-1.2 devices without cl_khr_fp64 answer this query with
+    ! CL_INVALID_VALUE rather than 0; treat any error as "no fp64".
+    fp64cfg          = dev_info_i64_opt(cl_device_h, CL_DEVICE_DOUBLE_FP_CONFIG)
     cl_has_fp64      = (fp64cfg /= 0_c_int64_t)
 
     print '(a)',        ' OpenCL device: '//trim(cl_dev_name)
@@ -322,6 +324,19 @@ contains
     call cl_check(err, 'clEnqueueReadBuffer(i8)')
   end subroutine cl_read_i8
 
+  ! Overwrite a device int8 buffer from a host array (used to re-zero the
+  ! completion flags before each tiled launch).
+  subroutine cl_write_i8(buf, arr, n)
+    integer(c_intptr_t), intent(in) :: buf
+    integer(int8), target, intent(in) :: arr(*)
+    integer(int64), intent(in) :: n
+    integer(c_int32_t) :: err
+    err = clEnqueueWriteBuffer(cl_queue_h, buf, CL_TRUE, 0_c_size_t, &
+                               int(n, c_size_t), c_loc(arr(1)), 0, &
+                               c_null_ptr, c_null_ptr)
+    call cl_check(err, 'clEnqueueWriteBuffer(i8)')
+  end subroutine cl_write_i8
+
   subroutine cl_release(buf)
     integer(c_intptr_t), intent(inout) :: buf
     integer(c_int32_t) :: err
@@ -439,6 +454,16 @@ contains
     logical :: complete
     integer(int8), allocatable, target :: flags(:)
     integer(c_intptr_t) :: bflag
+    character(32) :: env
+    integer :: stat
+
+    ! Test/debug hook: skip the single full launch and report "truncated" so
+    ! the caller exercises the tiled fallback (cl_run_bucketed).
+    call get_environment_variable('GRAMSCI_CL_FORCE_TILED', env, status=stat)
+    if (stat == 0) then
+      complete = .false.
+      return
+    end if
 
     allocate(flags(global))
     flags = 0_int8
@@ -471,14 +496,33 @@ contains
   ! the hubs/work-item ratio, then time each launch and grow toward TARGET_T
   ! seconds (capped per step so a launch cannot overshoot the watchdog).
   ! Override with GRAMSCI_CL_TARGET_SEC.
-  subroutine cl_run_bucketed(kernel, ia_nbuckets, ia_blo, ia_bhi, ia_flag, global, n_hubs)
+  !
+  ! Every launch is VERIFIED: the completion flags are read back after each
+  ! window (the first window is sized open-loop, so nothing guarantees it clears
+  ! the watchdog either).  Verified partials are periodically committed to
+  ! host_acc — read back and folded in as (sum - comp) in double, then re-zeroed
+  ! on the device — so at most FLUSH_T seconds of GPU work is ever at risk.  On
+  ! truncation the uncommitted device partials are discarded, the sweep rewinds
+  ! to the last committed window, and the window shrinks: truncation costs
+  ! time, never counts.
+  !
+  ! accbufs lists the fp32 accumulator buffers as (sum, comp) Kahan pairs:
+  ! [sum1, comp1, sum2, comp2, ...].  host_acc(ncol, size(accbufs)/2) must come
+  ! in zeroed; on return it holds the complete per-column totals in double and
+  ! the device accumulators are zero.
+  subroutine cl_run_bucketed(kernel, ia_nbuckets, ia_blo, ia_bhi, ia_flag, global, n_hubs, &
+                             accbufs, host_acc)
     integer(c_intptr_t), intent(in) :: kernel
     integer, intent(in) :: ia_nbuckets, ia_blo, ia_bhi, ia_flag
     integer(int64), intent(in) :: global, n_hubs
-    integer :: blo, bhi, gb, doneb, gb0
-    integer(int64) :: t0, t1, rate
-    real(real64) :: dt, target_t, hpw
+    integer(c_intptr_t), intent(in) :: accbufs(:)
+    real(real64), intent(inout) :: host_acc(:,:)
+    integer :: blo, bhi, gb, doneb, gb0, blo_committed, nacc, j, nfail
+    integer(int64) :: t0, t1, rate, ncol
+    real(real64) :: dt, target_t, hpw, t_unflushed
+    real(real64), parameter :: FLUSH_T = 5.0d0   ! max GPU seconds between commits
     integer(int8), allocatable, target :: flags(:)
+    real(real32), allocatable, target :: s32(:), z32(:)
     integer(c_intptr_t) :: bflag
     character(32) :: env
     integer :: stat
@@ -488,9 +532,10 @@ contains
     if (stat == 0) read(env, *) target_t
     if (target_t <= 0.0d0) target_t = 0.35d0
 
-    ! flag buffer is required by the kernel signature; not inspected here since
-    ! adaptively-sized windows stay under the watchdog.
-    allocate(flags(global))
+    nacc = size(accbufs) / 2
+    ncol = size(host_acc, 1)
+    allocate(flags(global), s32(ncol), z32(ncol))
+    z32 = 0.0_real32
     flags = 0_int8
     bflag = cl_buf_zeroed_i8(flags, global)
     call cl_arg_mem(kernel, ia_flag, bflag)
@@ -502,17 +547,61 @@ contains
     gb0 = max(min(gb0, 96), 1)
 
     blo = 0
+    blo_committed = 0
     gb  = gb0
+    t_unflushed = 0.0d0
+    nfail = 0
     do while (blo < CL_NBUCKETS)
       bhi = min(blo + gb, CL_NBUCKETS)
       call cl_arg_i32(kernel, ia_blo, blo)
       call cl_arg_i32(kernel, ia_bhi, bhi)
+      flags = 0_int8
+      call cl_write_i8(bflag, flags, global)
 
       call system_clock(t0, rate)
       call cl_run_1d(kernel, global)
       call system_clock(t1)
       dt    = real(t1 - t0, real64) / real(rate, real64)
       doneb = bhi - blo
+
+      call cl_read_i8(bflag, flags, global)
+      if (.not. all(flags == 1_int8)) then
+        ! Truncated: the launch left unknown partial counts in the device
+        ! accumulators.  Discard everything since the last commit and redo it.
+        nfail = nfail + 1
+        if (nfail > 12) then
+          write(error_unit,*) 'OpenCL ERROR: GPU watchdog truncates even minimal launches;'
+          write(error_unit,*) '              cannot make progress.  Use the CPU binary.'
+          stop 1
+        end if
+        do j = 1, size(accbufs)
+          call cl_write_f32(accbufs(j), z32, ncol)
+        end do
+        t_unflushed = 0.0d0
+        blo = blo_committed
+        target_t = max(min(target_t, 0.5d0 * dt), 0.01d0)
+        gb = max(gb / 2, 1)
+        print '("   watchdog truncated a tiled launch; rewinding to bucket ",i0,'// &
+              '" with window ",i0)', blo, gb
+        cycle
+      end if
+      nfail = 0
+
+      t_unflushed = t_unflushed + dt
+      blo = bhi
+
+      if (t_unflushed >= FLUSH_T .or. blo >= CL_NBUCKETS) then
+        do j = 1, nacc
+          call cl_read_f32(accbufs(2*j-1), s32, ncol)
+          host_acc(:, j) = host_acc(:, j) + real(s32, real64)
+          call cl_read_f32(accbufs(2*j), s32, ncol)
+          host_acc(:, j) = host_acc(:, j) - real(s32, real64)
+          call cl_write_f32(accbufs(2*j-1), z32, ncol)
+          call cl_write_f32(accbufs(2*j),   z32, ncol)
+        end do
+        blo_committed = blo
+        t_unflushed = 0.0d0
+      end if
 
       if (dt > 1.0d-4) then
         gb = int(real(doneb, real64) * target_t / dt)  ! buckets to fill target
@@ -522,12 +611,10 @@ contains
         gb = gb * 4                                     ! too fast to time; ramp
       end if
       gb = min(gb, CL_NBUCKETS)
-
-      blo = bhi
     end do
 
     call cl_release(bflag)
-    deallocate(flags)
+    deallocate(flags, s32, z32)
   end subroutine cl_run_bucketed
 
   ! -------------------------------------------------------------------------
@@ -554,6 +641,18 @@ contains
     err = clGetDeviceInfo(dev, param, 8_c_size_t, c_loc(v), ret)
     call cl_check(err, 'clGetDeviceInfo(i64)')
   end function dev_info_i64
+
+  ! As dev_info_i64 but a failed query yields 0 instead of aborting.
+  function dev_info_i64_opt(dev, param) result(v)
+    integer(c_intptr_t), intent(in) :: dev
+    integer(c_int32_t), intent(in) :: param
+    integer(c_int64_t), target :: v
+    integer(c_int32_t) :: err
+    integer(c_size_t) :: ret
+    v = 0
+    err = clGetDeviceInfo(dev, param, 8_c_size_t, c_loc(v), ret)
+    if (err /= CL_SUCCESS) v = 0
+  end function dev_info_i64_opt
 
   function dev_info_size(dev, param) result(v)
     integer(c_intptr_t), intent(in) :: dev

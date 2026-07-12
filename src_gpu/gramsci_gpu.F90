@@ -20,7 +20,7 @@ program Ngramsci_gpu
 
   type(kdtree2), pointer :: kd_tree
   integer :: i, j, nn2, thread, threads, ierr
-  real(kdkind) :: start, rand_val, avg_neighbors
+  real(kdkind) :: start, finish, rand_val, avg_neighbors
   integer(8) :: wt0, wt1, wt_rate
   real(kdkind), allocatable :: sample_vec(:)
 #ifdef MPI
@@ -147,10 +147,11 @@ program Ngramsci_gpu
 
   ! Graph build: time with system_clock (wall time).
   call system_clock(wt0, wt_rate)
-  call create_graph(1, 999)
   call cpu_time(start)
+  call create_graph(1, 999)
+  call cpu_time(finish)
   print '("Creating graph will take ~ ",f10.3," minutes.")', &
-    (start) * (cfg%num_data + cfg%num_rand) / (60.0 * 1000.0 * threads)
+    (finish - start) * (cfg%num_data + cfg%num_rand) / (60.0 * 1000.0 * threads)
   call create_graph(1000, cfg%num_data + cfg%num_rand)
   call system_clock(wt1)
   print '("Creating the graph took ",f12.3," seconds.")', &

@@ -28,7 +28,7 @@
 ! ---------------------------------------------------------------------------
 module query_4pcf_cl_module
   use iso_c_binding
-  use iso_fortran_env, only: int8, int32, int64, real32
+  use iso_fortran_env, only: int8, int32, int64, real32, real64
   use kdtree2_precision_module
   use config_module
   use csr_cl_module
@@ -42,13 +42,14 @@ module query_4pcf_cl_module
 contains
 
   ! Size ngang (work-items / accumulator columns) from the device.  Each of the
-  ! n_part accumulator buffers is ncfg*ngang floats; honour the single-buffer
-  ! limit and keep the total within ~70% of device memory.
+  ! n_part accumulator buffers is ncfg*ngang floats (n_part counts the Kahan
+  ! compensation buffers too); honour the single-buffer limit and keep the
+  ! total within ~70% of device memory.
   function pick_ngang_4pcf(ncfg, n_part) result(ngang)
     integer, intent(in) :: ncfg, n_part
     integer(int64) :: ngang, part_cap, n_hubs, total
     n_hubs = cfg%num_data + cfg%num_rand
-    part_cap = min(cl_max_alloc, 1073741824_int64)
+    part_cap = min(cl_max_alloc, 536870912_int64)
     ngang = max(1_int64, part_cap / (int(ncfg, int64) * 4_int64))
     ngang = min(ngang, n_hubs, 16384_int64)
     do
@@ -89,8 +90,10 @@ contains
     integer, intent(in) :: istart, iend
     integer :: nb, ncfg, c, g
     integer(int64) :: ngang, n_hubs, ncol
-    real(real32), allocatable :: wf(:), hn(:), hr(:)
+    real(real32), allocatable :: wf(:), hn(:), hr(:), hc(:)
+    real(real64), allocatable :: hacc(:,:)
     integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_w, b_buf, b_bt6, b_n4, b_r4, kern
+    integer(c_intptr_t) :: b_n4c, b_r4c
     real(kdkind) :: acc
 
     if (cfg%rank == 0) print *, 'Performing 4PCF (all configs, OpenCL bsearch)'
@@ -100,14 +103,17 @@ contains
     n_hubs = cfg%num_data + cfg%num_rand
     call check_bt6_fits(nb)
 
-    ngang = pick_ngang_4pcf(ncfg, 2)
+    ngang = pick_ngang_4pcf(ncfg, 4)   ! 2 partials + 2 Kahan compensations
     ncol  = int(ncfg, int64) * ngang
     if (cfg%rank == 0) print '("  ngang=",i0,"  n_configs=",i0)', ngang, ncfg
 
     call pack_weights(wf)
-    allocate(hn(ncol), hr(ncol))
+    allocate(hn(ncol), hr(ncol), hc(ncol))
     hn = 0.0_real32
     hr = 0.0_real32
+    hc = 0.0_real32
+    allocate(hacc(ncol, 2))
+    hacc = 0.0d0
 
     b_ptr  = cl_buf_in_i64(csr_ptr,  int(size(csr_ptr),int64))
     b_id   = cl_buf_in_i32(csr_id,   csr_total_edges)
@@ -117,6 +123,8 @@ contains
     b_bt6  = cl_buf_in_i32(bintable6, int(nb,int64)**6)   ! column-major == kernel flatten
     b_n4   = cl_buf_zeroed_f32(hn, ncol)
     b_r4   = cl_buf_zeroed_f32(hr, ncol)
+    b_n4c  = cl_buf_zeroed_f32(hc, ncol)   ! Kahan compensation of b_n4
+    b_r4c  = cl_buf_zeroed_f32(hc, ncol)   ! Kahan compensation of b_r4
 
     kern = cl_kernel_get('k_4pcf_all')
     call cl_arg_mem(kern, 0, b_ptr)
@@ -133,24 +141,36 @@ contains
     call cl_arg_i32(kern, 11, istart)
     call cl_arg_i32(kern, 12, iend)
     call cl_arg_i32(kern, 13, int(ngang, int32))
-    if (.not. cl_run_complete(kern, 14, 15, 16, 17, ngang)) then
+    call cl_arg_mem(kern, 18, b_n4c)
+    call cl_arg_mem(kern, 19, b_r4c)
+    if (cl_run_complete(kern, 14, 15, 16, 17, ngang)) then
+      call cl_read_f32(b_n4, hn, ncol)
+      call cl_read_f32(b_r4, hr, ncol)
+      hacc(:, 1) = real(hn, real64)
+      hacc(:, 2) = real(hr, real64)
+      call cl_read_f32(b_n4c, hc, ncol)
+      hacc(:, 1) = hacc(:, 1) - real(hc, real64)
+      call cl_read_f32(b_r4c, hc, ncol)
+      hacc(:, 2) = hacc(:, 2) - real(hc, real64)
+    else
       if (cfg%rank == 0) print *, '  single GPU launch hit the watchdog; retrying tiled (slower)'
-      call cl_write_f32(b_n4, hn, ncol)
+      call cl_write_f32(b_n4, hn, ncol)   ! hn/hr/hc are still all zeros here
       call cl_write_f32(b_r4, hr, ncol)
-      call cl_run_bucketed(kern, 14, 15, 16, 17, ngang, n_hubs)
+      call cl_write_f32(b_n4c, hc, ncol)
+      call cl_write_f32(b_r4c, hc, ncol)
+      call cl_run_bucketed(kern, 14, 15, 16, 17, ngang, n_hubs, &
+                           [b_n4, b_n4c, b_r4, b_r4c], hacc)
     end if
 
-    call cl_read_f32(b_n4, hn, ncol)
-    call cl_read_f32(b_r4, hr, ncol)
     do c = 1, ncfg
       acc = 0.0d0
       do g = 0, int(ngang) - 1
-        acc = acc + real(hn(int(g,int64)*ncfg + c), kdkind)
+        acc = acc + hacc(int(g,int64)*ncfg + c, 1)
       end do
       N4(c, 1) = N4(c, 1) + acc
       acc = 0.0d0
       do g = 0, int(ngang) - 1
-        acc = acc + real(hr(int(g,int64)*ncfg + c), kdkind)
+        acc = acc + hacc(int(g,int64)*ncfg + c, 2)
       end do
       R4(c, 1) = R4(c, 1) + acc
     end do
@@ -158,8 +178,9 @@ contains
     call cl_release(b_ptr); call cl_release(b_id); call cl_release(b_dist)
     call cl_release(b_w); call cl_release(b_buf); call cl_release(b_bt6)
     call cl_release(b_n4); call cl_release(b_r4)
+    call cl_release(b_n4c); call cl_release(b_r4c)
     call cl_release_kernel(kern)
-    deallocate(wf, hn, hr)
+    deallocate(wf, hn, hr, hc, hacc)
 
     call write_4pcf_results_noparity()
   end subroutine query_graph_4pcf_cl
@@ -172,11 +193,13 @@ contains
     integer :: nb, ncfg, ndir, c, g
     integer :: p1, p2, p3
     integer(int64) :: ngang, n_hubs, ncol, idx
-    real(real32), allocatable :: wf(:), hne(:), hno(:), hre(:), hro(:)
+    real(real32), allocatable :: wf(:), hne(:), hno(:), hre(:), hro(:), hc(:)
+    real(real64), allocatable :: hacc(:,:)
     integer(int8), allocatable :: signv(:)
     real(kdkind) :: vol, acc
     integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_phi, b_w, b_buf, b_bt6, b_sgn
     integer(c_intptr_t) :: b_ne, b_no, b_re, b_ro, kern
+    integer(c_intptr_t) :: b_nec, b_noc, b_rec, b_roc
 
     if (cfg%rank == 0) print *, 'Performing 4PCF parity (all configs, OpenCL bsearch)'
 
@@ -186,7 +209,7 @@ contains
     n_hubs = cfg%num_data + cfg%num_rand
     call check_bt6_fits(nb)
 
-    ngang = pick_ngang_4pcf(ncfg, 4)   ! 4 accumulator buffers
+    ngang = pick_ngang_4pcf(ncfg, 8)   ! 4 partials + 4 Kahan compensations
     ncol  = int(ncfg, int64) * ngang
     if (cfg%rank == 0) print '("  ngang=",i0,"  n_configs=",i0)', ngang, ncfg
 
@@ -212,8 +235,11 @@ contains
     end do
 
     call pack_weights(wf)
-    allocate(hne(ncol), hno(ncol), hre(ncol), hro(ncol))
+    allocate(hne(ncol), hno(ncol), hre(ncol), hro(ncol), hc(ncol))
     hne = 0.0_real32; hno = 0.0_real32; hre = 0.0_real32; hro = 0.0_real32
+    hc = 0.0_real32
+    allocate(hacc(ncol, 4))
+    hacc = 0.0d0
 
     b_ptr  = cl_buf_in_i64(csr_ptr,  int(size(csr_ptr),int64))
     b_id   = cl_buf_in_i32(csr_id,   csr_total_edges)
@@ -227,6 +253,10 @@ contains
     b_no   = cl_buf_zeroed_f32(hno, ncol)
     b_re   = cl_buf_zeroed_f32(hre, ncol)
     b_ro   = cl_buf_zeroed_f32(hro, ncol)
+    b_nec  = cl_buf_zeroed_f32(hc, ncol)   ! Kahan compensations of the four
+    b_noc  = cl_buf_zeroed_f32(hc, ncol)   ! partials above, in the same order
+    b_rec  = cl_buf_zeroed_f32(hc, ncol)
+    b_roc  = cl_buf_zeroed_f32(hc, ncol)
 
     kern = cl_kernel_get('k_4pcf_parity')
     call cl_arg_mem(kern, 0, b_ptr)
@@ -248,38 +278,60 @@ contains
     call cl_arg_i32(kern, 16, istart)
     call cl_arg_i32(kern, 17, iend)
     call cl_arg_i32(kern, 18, int(ngang, int32))
-    if (.not. cl_run_complete(kern, 19, 20, 21, 22, ngang)) then
+    call cl_arg_mem(kern, 23, b_nec)
+    call cl_arg_mem(kern, 24, b_noc)
+    call cl_arg_mem(kern, 25, b_rec)
+    call cl_arg_mem(kern, 26, b_roc)
+    if (cl_run_complete(kern, 19, 20, 21, 22, ngang)) then
+      call cl_read_f32(b_ne, hne, ncol)
+      call cl_read_f32(b_no, hno, ncol)
+      call cl_read_f32(b_re, hre, ncol)
+      call cl_read_f32(b_ro, hro, ncol)
+      hacc(:, 1) = real(hne, real64)
+      hacc(:, 2) = real(hno, real64)
+      hacc(:, 3) = real(hre, real64)
+      hacc(:, 4) = real(hro, real64)
+      call cl_read_f32(b_nec, hc, ncol)
+      hacc(:, 1) = hacc(:, 1) - real(hc, real64)
+      call cl_read_f32(b_noc, hc, ncol)
+      hacc(:, 2) = hacc(:, 2) - real(hc, real64)
+      call cl_read_f32(b_rec, hc, ncol)
+      hacc(:, 3) = hacc(:, 3) - real(hc, real64)
+      call cl_read_f32(b_roc, hc, ncol)
+      hacc(:, 4) = hacc(:, 4) - real(hc, real64)
+    else
       if (cfg%rank == 0) print *, '  single GPU launch hit the watchdog; retrying tiled (slower)'
-      call cl_write_f32(b_ne, hne, ncol)
+      call cl_write_f32(b_ne, hne, ncol)   ! host arrays are still all zeros here
       call cl_write_f32(b_no, hno, ncol)
       call cl_write_f32(b_re, hre, ncol)
       call cl_write_f32(b_ro, hro, ncol)
-      call cl_run_bucketed(kern, 19, 20, 21, 22, ngang, n_hubs)
+      call cl_write_f32(b_nec, hc, ncol)
+      call cl_write_f32(b_noc, hc, ncol)
+      call cl_write_f32(b_rec, hc, ncol)
+      call cl_write_f32(b_roc, hc, ncol)
+      call cl_run_bucketed(kern, 19, 20, 21, 22, ngang, n_hubs, &
+                           [b_ne, b_nec, b_no, b_noc, b_re, b_rec, b_ro, b_roc], hacc)
     end if
 
-    call cl_read_f32(b_ne, hne, ncol)
-    call cl_read_f32(b_no, hno, ncol)
-    call cl_read_f32(b_re, hre, ncol)
-    call cl_read_f32(b_ro, hro, ncol)
     do c = 1, ncfg
       acc = 0.0d0
       do g = 0, int(ngang) - 1
-        acc = acc + real(hne(int(g,int64)*ncfg + c), kdkind)
+        acc = acc + hacc(int(g,int64)*ncfg + c, 1)
       end do
       N4(c, 1) = N4(c, 1) + acc
       acc = 0.0d0
       do g = 0, int(ngang) - 1
-        acc = acc + real(hno(int(g,int64)*ncfg + c), kdkind)
+        acc = acc + hacc(int(g,int64)*ncfg + c, 2)
       end do
       N4(c, 2) = N4(c, 2) + acc
       acc = 0.0d0
       do g = 0, int(ngang) - 1
-        acc = acc + real(hre(int(g,int64)*ncfg + c), kdkind)
+        acc = acc + hacc(int(g,int64)*ncfg + c, 3)
       end do
       R4(c, 1) = R4(c, 1) + acc
       acc = 0.0d0
       do g = 0, int(ngang) - 1
-        acc = acc + real(hro(int(g,int64)*ncfg + c), kdkind)
+        acc = acc + hacc(int(g,int64)*ncfg + c, 4)
       end do
       R4(c, 2) = R4(c, 2) + acc
     end do
@@ -288,8 +340,9 @@ contains
     call cl_release(b_phi); call cl_release(b_w); call cl_release(b_buf)
     call cl_release(b_bt6); call cl_release(b_sgn)
     call cl_release(b_ne); call cl_release(b_no); call cl_release(b_re); call cl_release(b_ro)
+    call cl_release(b_nec); call cl_release(b_noc); call cl_release(b_rec); call cl_release(b_roc)
     call cl_release_kernel(kern)
-    deallocate(wf, hne, hno, hre, hro, signv)
+    deallocate(wf, hne, hno, hre, hro, hc, hacc, signv)
 
     call write_4pcf_results()
   end subroutine query_graph_4pcf_parity_cl

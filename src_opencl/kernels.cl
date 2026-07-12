@@ -8,6 +8,12 @@
  *   1. All device arithmetic is float.  Host reduction of the partials is done
  *      in double, and the parity chirality sign is looked up from a host-built
  *      table (computed in double) so it is bit-exact with the CPU reference.
+ *      Accumulation uses Kahan compensated summation (kadd below, one comp
+ *      array per partial array): a plain fp32 += stops registering increments
+ *      once a column partial passes ~2/eps times the increment (~1.7e7 tuples
+ *      per column for unit weights), which silently and one-sidedly undercounts
+ *      the monotone RRR/RRRR channels on production-size runs.  With the
+ *      compensation term the error stays O(eps) independent of the count.
  *
  *   2. No atomics.  Each work-item IS one "gang": it owns column g of the
  *      partial accumulators and processes a strided set of hubs
@@ -20,6 +26,18 @@
  *   id[e-1], dist[e-1]     neighbor id and distance-bin of edge e (1..tot)
  * Distance bins are 1..nbins; bin 0 means "no such edge".
  * ========================================================================== */
+
+/* Kahan compensated add into sum[idx] (comp[idx] carries the rounding error).
+ * OpenCL C defaults to strict IEEE float add (no reassociation), so the
+ * compensation cannot be optimised away.  The true total is sum - comp; the
+ * host subtracts the comp array in its double reduction. */
+inline void kadd(__global float *sum, __global float *comp, long idx, float val)
+{
+    float y = val - comp[idx];
+    float t = sum[idx] + y;
+    comp[idx] = (t - sum[idx]) - y;
+    sum[idx]  = t;
+}
 
 /* Binary search node `from`'s sorted adjacency row for neighbor `to`.
  * Returns the distance-bin (1..nbins) or 0 if the edge is absent.
@@ -63,7 +81,9 @@ __kernel void k_3pcf_all(__global const long  *ptr,
                          const int num_data, const int istart,
                          const int iend, const int ngang,
                          const int nbuckets, const int blo, const int bhi,
-                         __global char *done_flag)
+                         __global char *done_flag,
+                         __global float *comp_nnn,
+                         __global float *comp_rrr)
 {
     int g = (int)get_global_id(0);
     long gcol = (long)g * cb;
@@ -98,9 +118,9 @@ __kernel void k_3pcf_all(__global const long  *ptr,
                 int bin = bt3[(c1 - 1) + nbins * ((c2 - 1) + nbins * (c3 - 1))];
                 float w3 = wi_w1 * w[n2 - 1];
 
-                part_nnn[gcol + bin - 1] += w3;
+                kadd(part_nnn, comp_nnn, gcol + bin - 1, w3);
                 if (i > num_data && n1 > num_data && n2 > num_data)
-                    part_rrr[gcol + bin - 1] -= w3;
+                    kadd(part_rrr, comp_rrr, gcol + bin - 1, -w3);
             }
         }
     }
@@ -122,7 +142,9 @@ __kernel void k_3pcf_equi(__global const long  *ptr,
                           const int num_data, const int istart,
                           const int iend, const int ngang,
                          const int nbuckets, const int blo, const int bhi,
-                         __global char *done_flag)
+                         __global char *done_flag,
+                         __global float *comp_nnn,
+                         __global float *comp_rrr)
 {
     int g = (int)get_global_id(0);
     long gcol = (long)g * cb;
@@ -157,9 +179,9 @@ __kernel void k_3pcf_equi(__global const long  *ptr,
                 int bin = (int)c1;                 /* 1-based radial bin */
                 float w3 = wi_w1 * w[n2 - 1];
 
-                part_nnn[gcol + bin - 1] += w3;
+                kadd(part_nnn, comp_nnn, gcol + bin - 1, w3);
                 if (i > num_data && n1 > num_data && n2 > num_data)
-                    part_rrr[gcol + bin - 1] -= w3;
+                    kadd(part_rrr, comp_rrr, gcol + bin - 1, -w3);
             }
         }
     }
@@ -193,7 +215,9 @@ __kernel void k_4pcf_all(__global const long  *ptr,
                          const int num_data,
                          const int istart, const int iend, const int ngang,
                          const int nbuckets, const int blo, const int bhi,
-                         __global char *done_flag)
+                         __global char *done_flag,
+                         __global float *comp_n4,
+                         __global float *comp_r4)
 {
     int  g    = (int)get_global_id(0);
     long gcol = (long)g * ncfg;
@@ -240,9 +264,9 @@ __kernel void k_4pcf_all(__global const long  *ptr,
                     if (cfgidx == 0) continue;
 
                     float w4 = w12 * w[n3 - 1];
-                    part_n4[gcol + cfgidx - 1] += w4;
+                    kadd(part_n4, comp_n4, gcol + cfgidx - 1, w4);
                     if (rand12 && n3 > num_data)
-                        part_r4[gcol + cfgidx - 1] += w4;
+                        kadd(part_r4, comp_r4, gcol + cfgidx - 1, w4);
                 }
             }
         }
@@ -273,7 +297,11 @@ __kernel void k_4pcf_parity(__global const long  *ptr,
                             const int num_data, const int ndir,
                             const int istart, const int iend, const int ngang,
                          const int nbuckets, const int blo, const int bhi,
-                         __global char *done_flag)
+                         __global char *done_flag,
+                         __global float *cn_even,
+                         __global float *cn_odd,
+                         __global float *cr_even,
+                         __global float *cr_odd)
 {
     int  g    = (int)get_global_id(0);
     long gcol = (long)g * ncfg;
@@ -330,11 +358,11 @@ __kernel void k_4pcf_parity(__global const long  *ptr,
                     float w4 = w12 * w[n3 - 1];
                     float w4o = (float)(pflip * sgn) * w4;
 
-                    pn_even[gcol + cfgidx - 1] += w4;
-                    pn_odd [gcol + cfgidx - 1] += w4o;
+                    kadd(pn_even, cn_even, gcol + cfgidx - 1, w4);
+                    kadd(pn_odd,  cn_odd,  gcol + cfgidx - 1, w4o);
                     if (rand12 && n3 > num_data) {
-                        pr_even[gcol + cfgidx - 1] += w4;
-                        pr_odd [gcol + cfgidx - 1] += w4o;
+                        kadd(pr_even, cr_even, gcol + cfgidx - 1, w4);
+                        kadd(pr_odd,  cr_odd,  gcol + cfgidx - 1, w4o);
                     }
                 }
             }
