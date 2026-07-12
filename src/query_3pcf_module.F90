@@ -224,10 +224,11 @@ contains
 
     unit_num = 30
     open(unit_num, file=trim(mode_output_file('3pcf')), status='unknown')
+    call write_provenance(unit_num)
     if (cfg%RSD) then
-      write(unit_num, *) 'r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, mu min, mu max, NNN, RRR, 3pcf (zeta)'
+      write(unit_num, '(a)') '# r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, mu min, mu max, NNN, RRR, 3pcf (zeta)'
     else
-      write(unit_num, *) 'r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, NNN, RRR, 3pcf (zeta)'
+      write(unit_num, '(a)') '# r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, NNN, RRR, 3pcf (zeta)'
     end if
 
     do i = 1, cfg%nbins
@@ -278,6 +279,8 @@ contains
 
     unit_num = 30
     open(unit_num, file=trim(mode_output_file('equi')), status='unknown')
+    call write_provenance(unit_num)
+    write(unit_num, '(a)') '# r min, r max, mu min, mu max, NNN, RRR, equilateral 3pcf (zeta)'
     do l = 1, cfg%nbins
       do k = 1, cfg%nmu
         if (cfg%analytic) then

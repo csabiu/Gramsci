@@ -350,9 +350,11 @@ def test_combined_modes(bindir):
         combined = f'tmp_combined.{m}'
         single = f'tmp_single.{m}'
         assert os.path.exists(combined), f"combined run did not write {combined}"
-        with open(combined) as fc, open(single) as fs:
-            assert fc.read() == fs.read(), \
-                f"combined-mode {m} output differs from the single-mode run"
+        def data_rows(path):
+            with open(path) as f:
+                return [l for l in f if not l.startswith('#')]
+        assert data_rows(combined) == data_rows(single), \
+            f"combined-mode {m} output differs from the single-mode run"
         print(f"  {m}: combined output identical to single-mode run")
 
     # a combined run must not also write the bare -out name
@@ -492,13 +494,14 @@ def main():
     cmd4 = f"{os.path.join(bindir, 'gramsci')} -gal {gal} -ran {ran} -rmin 1.0 -rmax 30.0 -nbins 3 -nmu 1 -out {out4} -4pcf"
     run(cmd4)
     with open(out4) as f:
-        header = f.readline()
+        lines = f.readlines()
+    header = [l for l in lines if l.startswith('#')][-1]  # column names follow the provenance block
+    if True:
         assert 'NNNN' in header and 'RRRR' in header and 'zeta' in header, \
             f'4pcf header check failed: {header}'
         assert 'zeta_disc' in header and 'zeta_conn' in header, \
             f'4pcf disconnected columns missing: {header}'
-        lines = f.readlines()
-        assert len(lines) > 0, '4pcf produced no output rows'
+        assert any(not l.startswith('#') for l in lines), '4pcf produced no output rows'
 
     # Verify disconnected subtraction: zeta_conn = (zeta - 1) - zeta_disc
     tmp4 = np.loadtxt(out4, skiprows=1)
@@ -523,13 +526,14 @@ def main():
     cmd4p = f"{os.path.join(bindir, 'gramsci')} -gal {gal} -ran {ran} -rmin 1.0 -rmax 30.0 -nbins 3 -nmu 1 -out {out4p} -4pcfp"
     run(cmd4p)
     with open(out4p) as f:
-        header = f.readline()
+        lines = f.readlines()
+    header = [l for l in lines if l.startswith('#')][-1]
+    if True:
         assert 'zeta_even' in header and 'zeta_odd' in header, \
             f'4pcfp header check failed: {header}'
         assert 'zeta_disc' in header and 'zeta_conn_even' in header and 'zeta_conn_odd' in header, \
             f'4pcfp disconnected columns missing: {header}'
-        lines = f.readlines()
-        assert len(lines) > 0, '4pcfp produced no output rows'
+        assert any(not l.startswith('#') for l in lines), '4pcfp produced no output rows'
 
     # Verify parity disconnected subtraction
     tmp4p = np.loadtxt(out4p, skiprows=1)

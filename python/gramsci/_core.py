@@ -61,7 +61,8 @@ def _load(path, stdout=''):
             f"gramsci did not produce output at {path}. Binary output:\n"
             f"{stdout[-2000:]}"
         )
-    return np.loadtxt(path, skiprows=1)
+    # every header line (provenance block + column names) starts with '#'
+    return np.loadtxt(path)
 
 
 def _box_arg(box):

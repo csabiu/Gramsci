@@ -23,7 +23,6 @@ program Ngramsci
 
   ! ---- Configuration ----
   call default_params()
-  if (cfg%rank == cfg%master) print *, 'reading options'
   call parseOptions()
 
   cfg%config_bins = cfg%nbins

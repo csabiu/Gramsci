@@ -4,6 +4,10 @@ module config_module
   use iso_fortran_env, only: int8
   implicit none
 
+  ! Single source of truth for the release version (see CHANGELOG.md);
+  ! printed by -version and stamped into every output file's header.
+  character(len=*), parameter :: GRAMSCI_VERSION = '2.4.0'
+
   ! Configuration derived type bundling all parameters
   type :: gramsci_config
     integer :: d = 3
@@ -51,6 +55,9 @@ module config_module
     logical :: disc_rsd = .false.
     character(len=2000) :: file1 = '', file2 = '', ranfile = ''
     character(len=2000) :: output_file = 'result.txt'
+    ! Which build is running ('cpu' | 'openacc' | 'opencl'); set by the
+    ! driver before parseOptions, reported by -version and the file headers
+    character(len=8) :: backend = 'cpu'
     ! Process identity: always rank 0 of 1 (kept so the write routines'
     ! rank guards read uniformly across the CPU/GPU/OpenCL drivers)
     integer :: rank = 0
@@ -128,6 +135,16 @@ contains
     character(len=2000) :: arg
 
     n = nArguments()
+
+    ! -version must work standalone, so scan for it before any arg-count check
+    do i = 1, n
+      call getArgument(i, opt)
+      if (opt == '-version') then
+        print '(a)', 'gramsci ' // GRAMSCI_VERSION // ' (' // trim(cfg%backend) // ' build)'
+        stop
+      end if
+    end do
+
     if (n < 6 .and. cfg%rank == cfg%master) then
       print *, ' '
       print *, 'Not enough input parameters. Please read the following help info'
@@ -189,6 +206,8 @@ contains
       case ('-help')
         call print_help()
         stop
+      case ('-version')   ! handled by the pre-scan above; never reached
+        i = i + 1
       case ('-3pcf')
         cfg%three_pcf = .true.
         i = i + 1
@@ -364,6 +383,7 @@ contains
     print *, '       -nbins  number of radial bins'
     print *, '       -nmu    number of mu bins (enables anisotropic analysis)'
     print *, '       -log    use logarithmic radial binning'
+    print *, '       -version  print the version and exit'
     print *, '       -box    periodic box side length L (or Lx,Ly,Lz).'
     print *, '               Uses minimum-image separations; without -ran the'
     print *, '               RR/RRR/RRRR counts are computed analytically'
@@ -433,6 +453,32 @@ contains
     if (allocated(weights)) deallocate(weights)
     if (allocated(radial_bins)) deallocate(radial_bins)
   end subroutine deallocate_arrays
+
+  ! Provenance block written at the top of every output file, so results are
+  ! self-documenting: version/build, timestamp, the exact command line, and
+  ! the catalogue sizes.  All lines start with '#' (numpy's default comment
+  ! character), as does the column-name header that follows.
+  subroutine write_provenance(unit_num)
+    integer, intent(in) :: unit_num
+    character(len=4000) :: cmd
+    integer :: dt(8)
+
+    call get_command(cmd)
+    call date_and_time(values=dt)
+
+    write(unit_num, '(a)') '# gramsci ' // GRAMSCI_VERSION // &
+                           ' (' // trim(cfg%backend) // ' build)'
+    write(unit_num, '(a,i4.4,"-",i2.2,"-",i2.2,1x,i2.2,":",i2.2,":",i2.2)') &
+      '# date: ', dt(1), dt(2), dt(3), dt(5), dt(6), dt(7)
+    write(unit_num, '(a)') '# command: ' // trim(cmd)
+    write(unit_num, '(a,i0,a,i0)') '# n_data = ', cfg%num_data, &
+                                   '   n_randoms = ', cfg%num_rand
+    if (cfg%analytic) then
+      write(unit_num, '(a,3(f0.4,1x))') '# analytic randoms, periodic box: ', cfg%boxsize
+    else if (cfg%periodic) then
+      write(unit_num, '(a,3(f0.4,1x))') '# periodic box: ', cfg%boxsize
+    end if
+  end subroutine write_provenance
 
   ! Output filename for one query mode: with a single mode this is exactly
   ! -out; with combined modes each result goes to <output_file>.<mode>.

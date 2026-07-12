@@ -803,10 +803,11 @@ contains
 
     unit_num = 40
     open(unit_num, file=trim(mode_output_file('4pcfp')), status='unknown')
-    write(unit_num, *) 'r12min r12max r13min r13max r14min r14max ', &
-                       'r23min r23max r24min r24max r34min r34max ', &
-                       'NNNN RRRR zeta_even NNNN_odd RRRR_odd zeta_odd ', &
-                       'zeta_disc zeta_conn_even zeta_conn_odd'
+    call write_provenance(unit_num)
+    write(unit_num, '(a)') '# r12min r12max r13min r13max r14min r14max ' // &
+                           'r23min r23max r24min r24max r34min r34max ' // &
+                           'NNNN RRRR zeta_even NNNN_odd RRRR_odd zeta_odd ' // &
+                           'zeta_disc zeta_conn_even zeta_conn_odd'
 
     ! Iterate over all unique configurations by index; use the stored canonical
     ! bin tuple for edge labels.  This covers every orbit regardless of whether
@@ -892,9 +893,10 @@ contains
 
     unit_num = 40
     open(unit_num, file=trim(mode_output_file('4pcf')), status='unknown')
-    write(unit_num, *) 'r12min r12max r13min r13max r14min r14max ', &
-                       'r23min r23max r24min r24max r34min r34max ', &
-                       'NNNN RRRR zeta zeta_disc zeta_conn'
+    call write_provenance(unit_num)
+    write(unit_num, '(a)') '# r12min r12max r13min r13max r14min r14max ' // &
+                           'r23min r23max r24min r24max r34min r34max ' // &
+                           'NNNN RRRR zeta zeta_disc zeta_conn'
 
     ! Iterate over all unique configurations by index; use the stored canonical
     ! bin tuple for edge labels.  This covers every orbit regardless of whether

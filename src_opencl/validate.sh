@@ -47,8 +47,8 @@ run_test() {
 
   if python3 - "$cpu_out" "$gpu_out" "$TOL" <<'PYEOF'
 import sys, numpy as np
-cpu = np.loadtxt(sys.argv[1], comments='r', ndmin=2)
-gpu = np.loadtxt(sys.argv[2], comments='r', ndmin=2)
+cpu = np.loadtxt(sys.argv[1], ndmin=2)   # all header lines start with '#'
+gpu = np.loadtxt(sys.argv[2], ndmin=2)
 tol = float(sys.argv[3])
 if cpu.shape != gpu.shape:
     print(f"SHAPE MISMATCH: CPU {cpu.shape} vs OpenCL {gpu.shape}"); sys.exit(1)

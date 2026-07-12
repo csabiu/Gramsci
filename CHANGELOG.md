@@ -15,6 +15,13 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   fixed the cross-contamination but forced one full graph build per
   statistic. Combined outputs are verified byte-identical to the
   corresponding single-mode runs (CPU regression test added).
+- **`-version` flag** (`gramsci 2.4.0 (cpu build)` — the OpenCL and
+  OpenACC binaries report their backend), and a **provenance header** in
+  every output file: version/build, timestamp, the exact command line,
+  catalogue sizes, and box geometry, as `#` comment lines. The column-name
+  header is now also a `#` comment (and the equilateral output gains one),
+  so `np.loadtxt` reads every output with no `skiprows` needed — existing
+  `skiprows=1` calls keep working since the skipped line is a comment.
 
 ## [2.3.0] — 2026-07-12
 

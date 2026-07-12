@@ -101,6 +101,7 @@ bin/gramsci -gal galaxies.dat -ran randoms.dat \
 | `-nbins <N>`        | number of radial bins                                    |
 | `-nmu <N>`          | number of μ bins (anisotropic; default 1 = isotropic)    |
 | `-log`              | logarithmic radial binning                               |
+| `-version`          | print the version and exit                               |
 | `-box <L>`          | periodic box, side L (or `Lx,Ly,Lz`); no `-ran` ⇒ analytic RR |
 | `-2pcf`             | 2-point correlation function                             |
 | `-3pcf` / `-equi`   | 3PCF (all triangles) / equilateral only                  |

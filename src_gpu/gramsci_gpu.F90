@@ -26,7 +26,7 @@ program Ngramsci_gpu
 
   ! ---- Configuration ----
   call default_params()
-  if (cfg%rank == cfg%master) print *, 'reading options'
+  cfg%backend = 'openacc'
   call parseOptions()
 
   cfg%config_bins = cfg%nbins

@@ -36,7 +36,7 @@ program gramsci_cl
 
   ! ---- Configuration ----
   call default_params()
-  if (cfg%rank == cfg%master) print *, 'reading options'
+  cfg%backend = 'opencl'
   call parseOptions()
 
   ! ---- Initialise the OpenCL device (banner + kernel build) ----
