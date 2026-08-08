@@ -10,9 +10,6 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 [![arXiv](https://img.shields.io/badge/arXiv-1901.00296-b31b1b.svg)](https://arxiv.org/abs/1901.00296)
 
-<p align="center">
-  <img src="example/bao_3pcf.png" width="620" alt="Baryon acoustic feature in the 3-point correlation function measured with GRAMSCI">
-</p>
 
 GRAMSCI measures the N-point correlation functions of a 3D catalogue (a galaxy
 survey, a simulation box, …).  It builds a KD-tree, stores each point's
@@ -167,6 +164,14 @@ come first, then counts and the estimator. The Python wrapper unpacks them:
 | `-4pcf` | 6 side bins, `NNNN`, `RRRR`, `zeta`, `zeta_disc`, `zeta_conn`     |
 | `-4pcfp`| … plus `zeta_even`, `NNNN_odd`, `RRRR_odd`, `zeta_odd`            |
 
+## The 3pcf at the BAO scale 
+
+<p align="center">
+  <img src="example/bao_3pcf.png" width="620" alt="Baryon acoustic feature in the 3-point correlation function measured with GRAMSCI">
+</p>
+
+[From Sabiu et. al. 2019]
+
 ## How it works
 
 GRAMSCI runs in two phases:
@@ -220,19 +225,40 @@ tests/       regression + benchmark scripts        paper/     the method paper
 If GRAMSCI contributes to your research, please cite:
 
 ```bibtex
-@article{Sabiu2019_GRAMSCI,
-  author  = {Sabiu, Cristiano G. and Hoyle, Ben and Kim, Juhan and Li, Xiao-Dong},
-  title   = {Graph Database Solution for Higher-order Spatial Statistics
-             in the Era of Big Data},
-  journal = {The Astrophysical Journal Supplement Series},
-  year    = {2019},
-  volume  = {242},
-  number  = {2},
-  pages   = {29},
-  doi     = {10.3847/1538-4365/ab22b5},
-  eprint  = {1901.00296},
-  archivePrefix = {arXiv},
-  primaryClass  = {astro-ph.CO}
+@ARTICLE{2019ApJS..242...29S,
+       author = {{Sabiu}, Cristiano G. and {Hoyle}, Ben and {Kim}, Juhan and {Li}, Xiao-Dong},
+        title = "{Graph Database Solution for Higher-order Spatial Statistics in the Era of Big Data}",
+      journal = {\apjs},
+     keywords = {cosmology: theory, methods: data analysis, Astrophysics - Cosmology and Nongalactic Astrophysics, Astrophysics - Instrumentation and Methods for Astrophysics},
+         year = 2019,
+        month = jun,
+       volume = {242},
+       number = {2},
+          eid = {29},
+        pages = {29},
+          doi = {10.3847/1538-4365/ab22b5},
+archivePrefix = {arXiv},
+       eprint = {1901.00296},
+ primaryClass = {astro-ph.CO},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2019ApJS..242...29S},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+@ARTICLE{2026arXiv260706604S,
+       author = {{Sabiu}, Cristiano G.},
+        title = "{Fast Graph-based Higher-Order Clustering Statistics on the GPU}",
+      journal = {arXiv e-prints},
+     keywords = {Instrumentation and Methods for Astrophysics, Cosmology and Nongalactic Astrophysics},
+         year = 2026,
+        month = jul,
+          eid = {arXiv:2607.06604},
+        pages = {arXiv:2607.06604},
+          doi = {10.48550/arXiv.2607.06604},
+archivePrefix = {arXiv},
+       eprint = {2607.06604},
+ primaryClass = {astro-ph.IM},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2026arXiv260706604S},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
 }
 ```
 
