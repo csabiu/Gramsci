@@ -27,7 +27,10 @@ fast and memory-light.
 - A **Python API** that takes NumPy arrays, plus a command-line tool.
 
 > Sabiu, Hoyle, Kim & Li, *ApJS* **242**, 29 (2019),
-> [arXiv:1901.00296](https://arxiv.org/abs/1901.00296). Please cite if you use
+> [arXiv:1901.00296](https://arxiv.org/abs/1901.00296),
+> Sabiu *ApJS* _under_ _review_ (2026),
+> [arXiv:2607.06604](https://arxiv.org/abs/2607.06604).
+> Please cite if you use
 > GRAMSCI — see [Citation](#citation).
 
 ---
