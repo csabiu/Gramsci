@@ -13,8 +13,9 @@ contains
   subroutine query_graph_3pcf_all(istart, iend)
     integer, intent(in) :: istart, iend
     integer :: i, k1, nn2, id1, nn_id1, a, b, bin
+    integer :: id3, jr1, jr2, jr3
     integer(int8) :: ind1, ind2, ind3
-    real(kdkind) :: wi_w1
+    real(kdkind) :: wi_w1, w3, wprod
 
     if (.not. cfg%half_graph) then
       print *, 'ERROR: merge-walk 3PCF requires half_graph=.true.'
@@ -25,9 +26,12 @@ contains
 
     !$OMP PARALLEL DO schedule(dynamic) &
     !$OMP& private(i, k1, nn2, id1, nn_id1, a, b, ind1, ind2, ind3, bin, wi_w1) &
-    !$OMP& shared(weights, output, buffer, cfg, bintable) &
+    !$OMP& private(id3, jr1, jr2, jr3, w3, wprod) &
+    !$OMP& shared(weights, output, buffer, cfg, bintable, region) &
     !$OMP& reduction(+:N2) &
-    !$OMP& reduction(+:N3)
+    !$OMP& reduction(+:N3) &
+    !$OMP& reduction(+:N2jk) &
+    !$OMP& reduction(+:N3jk)
     do i = istart, iend
       if (buffer(i) == 1) cycle
 
@@ -51,19 +55,63 @@ contains
             ind3 = output(id1)%dist(b)
             if (ind2 /= 0 .and. ind3 /= 0) then
               bin = bintable(ind1, ind2, ind3, 1)
+              id3 = output(i)%id(a)
+              w3 = weights(id3)
+              wprod = wi_w1 * w3
+              ! Jackknife bookkeeping: accumulate this triplet against each
+              ! DISTINCT region it touches. Deduplication matters -- a triplet
+              ! with two nodes in the same region must be subtracted once, not
+              ! twice, when that region is deleted.
+              if (cfg%njk > 0) then
+                jr1 = region(i)
+                jr2 = region(id1)
+                jr3 = region(id3)
+              end if
               if (cfg%RSD) then
                 call find_normal(output(i)%mu(k1), output(i)%mu(a), ind2)
                 if (i > cfg%num_data .and. id1 > cfg%num_data .and. &
-                    output(i)%id(a) > cfg%num_data) then
-                  N3(bin, ind2, 3) = N3(bin, ind2, 3) - wi_w1 * weights(output(i)%id(a))
+                    id3 > cfg%num_data) then
+                  N3(bin, ind2, 3) = N3(bin, ind2, 3) - wprod
+                  if (cfg%njk > 0) then
+                    if (jr1 > 0) &
+                      N3jk(bin, ind2, 3, jr1) = N3jk(bin, ind2, 3, jr1) - wprod
+                    if (jr2 > 0 .and. jr2 /= jr1) &
+                      N3jk(bin, ind2, 3, jr2) = N3jk(bin, ind2, 3, jr2) - wprod
+                    if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) &
+                      N3jk(bin, ind2, 3, jr3) = N3jk(bin, ind2, 3, jr3) - wprod
+                  end if
                 end if
-                N2(bin, ind2, 3) = N2(bin, ind2, 3) + wi_w1 * weights(output(i)%id(a))
+                N2(bin, ind2, 3) = N2(bin, ind2, 3) + wprod
+                if (cfg%njk > 0) then
+                  if (jr1 > 0) &
+                    N2jk(bin, ind2, 3, jr1) = N2jk(bin, ind2, 3, jr1) + wprod
+                  if (jr2 > 0 .and. jr2 /= jr1) &
+                    N2jk(bin, ind2, 3, jr2) = N2jk(bin, ind2, 3, jr2) + wprod
+                  if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) &
+                    N2jk(bin, ind2, 3, jr3) = N2jk(bin, ind2, 3, jr3) + wprod
+                end if
               else
                 if (i > cfg%num_data .and. id1 > cfg%num_data .and. &
-                    output(i)%id(a) > cfg%num_data) then
-                  N3(bin, 1, 3) = N3(bin, 1, 3) - wi_w1 * weights(output(i)%id(a))
+                    id3 > cfg%num_data) then
+                  N3(bin, 1, 3) = N3(bin, 1, 3) - wprod
+                  if (cfg%njk > 0) then
+                    if (jr1 > 0) &
+                      N3jk(bin, 1, 3, jr1) = N3jk(bin, 1, 3, jr1) - wprod
+                    if (jr2 > 0 .and. jr2 /= jr1) &
+                      N3jk(bin, 1, 3, jr2) = N3jk(bin, 1, 3, jr2) - wprod
+                    if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) &
+                      N3jk(bin, 1, 3, jr3) = N3jk(bin, 1, 3, jr3) - wprod
+                  end if
                 end if
-                N2(bin, 1, 3) = N2(bin, 1, 3) + wi_w1 * weights(output(i)%id(a))
+                N2(bin, 1, 3) = N2(bin, 1, 3) + wprod
+                if (cfg%njk > 0) then
+                  if (jr1 > 0) &
+                    N2jk(bin, 1, 3, jr1) = N2jk(bin, 1, 3, jr1) + wprod
+                  if (jr2 > 0 .and. jr2 /= jr1) &
+                    N2jk(bin, 1, 3, jr2) = N2jk(bin, 1, 3, jr2) + wprod
+                  if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) &
+                    N2jk(bin, 1, 3, jr3) = N2jk(bin, 1, 3, jr3) + wprod
+                end if
               end if
             end if
             a = a + 1
@@ -79,6 +127,7 @@ contains
     !$OMP END PARALLEL DO
 
     call write_3pcf_results()
+    call write_3pcf_jackknife()
   end subroutine query_graph_3pcf_all
 
   ! Original binary-search implementation, kept for benchmarking.
@@ -89,6 +138,11 @@ contains
     integer(int8) :: ind1, ind2, ind3
     real(kdkind) :: wi_w1
 
+    if (cfg%njk > 0) then
+      print *, 'ERROR: -njk is implemented for the merge-walk 3PCF only, '// &
+               'not the binary-search variant.'
+      stop
+    end if
     if (cfg%rank == 0) print *, 'Performing 3pcf (all configurations, binary-search)'
     if (cfg%rank == 0) print *, 'begin querying the graph'
 
@@ -219,6 +273,57 @@ contains
     end do
     close(unit_num)
   end subroutine write_3pcf_results
+
+  ! Write the delete-one jackknife realisations. Realisation m omits every
+  ! triplet touching region m:  N_m = N_total - N_touching(m).
+  ! Weight renormalisation is deliberately NOT applied: deleting a region
+  ! scales the data and random weight sums by the same factor to the accuracy
+  ! that the randoms trace the selection, and that factor cancels in the ratio
+  ! zeta = N2/N3.
+  subroutine write_3pcf_jackknife()
+    integer :: i, j, k, l, m, unit_num
+    real(kdkind) :: n2m, n3m
+
+    if (cfg%rank /= cfg%master) return
+    if (cfg%njk <= 0) return
+
+    unit_num = 31
+    open(unit_num, file=trim(cfg%output_file)//'.jk', status='unknown')
+    write(unit_num, *) '# delete-one jackknife realisations, njk = ', cfg%njk
+    if (cfg%RSD) then
+      write(unit_num, *) '# r1min r1max r2min r2max r3min r3max mumin mumax ireal NNN RRR zeta'
+    else
+      write(unit_num, *) '# r1min r1max r2min r2max r3min r3max ireal NNN RRR zeta'
+    end if
+
+    do i = 1, cfg%nbins
+      do j = i, cfg%nbins
+        do k = j, cfg%nbins
+          associate(bin => bintable(i, j, k, 1))
+          do l = 1, cfg%nmu
+            do m = 1, cfg%njk
+              n2m = N2(bin, l, 3) - N2jk(bin, l, 3, m)
+              n3m = N3(bin, l, 3) - N3jk(bin, l, 3, m)
+              if (cfg%RSD) then
+                write(unit_num, '(8(e14.7,1x),i6,1x,3(e14.7,1x))') &
+                  radial_bins(i), radial_bins(i+1), radial_bins(j), radial_bins(j+1), &
+                  radial_bins(k), radial_bins(k+1), &
+                  ((float(l)-1.)/cfg%mu_scale/2.), (float(l)/cfg%mu_scale/2.), &
+                  m, n2m, n3m, n2m / n3m
+              else
+                write(unit_num, '(6(e14.7,1x),i6,1x,3(e14.7,1x))') &
+                  radial_bins(i), radial_bins(i+1), radial_bins(j), radial_bins(j+1), &
+                  radial_bins(k), radial_bins(k+1), m, n2m, n3m, n2m / n3m
+              end if
+            end do
+          end do
+          end associate
+        end do
+      end do
+    end do
+    close(unit_num)
+    print *, 'wrote jackknife realisations to ', trim(cfg%output_file)//'.jk'
+  end subroutine write_3pcf_jackknife
 
   subroutine write_equilateral_results()
     integer :: l, k, unit_num

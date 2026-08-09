@@ -91,6 +91,7 @@ program Ngramsci
   kd_tree => kdtree2_create(points, sort=.true., rearrange=.true.)
 
   if (cfg%rank == 0) print *, 'allocating arrays '
+  call read_jk_regions()
   call allocate_result_arrays()
 
   ! ---- Memory estimation (first-principles) ----
