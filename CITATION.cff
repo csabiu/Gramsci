@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: >-
+  If you use GRAMSCI, please cite the paper below (Sabiu et al. 2019)
+  and, for the v2 features (merge-walk kernels, parity-decomposed and
+  connected 4PCF, GPU port with out-of-core support), the v2 paper and
+  the archived release.
+title: "GRAMSCI: GRAph Made Statistics for Cosmological Information"
+authors:
+  - family-names: Sabiu
+    given-names: Cristiano G.
+    email: csabiu@gmail.com
+    affiliation: "Department of Physics, University of Seoul"
+version: 2.0.0
+repository-code: "https://github.com/csabiu/Gramsci"
+license: GPL-3.0
+preferred-citation:
+  type: article
+  title: >-
+    Graph Database Solution for Higher-order Spatial Statistics in the
+    Era of Big Data
+  authors:
+    - family-names: Sabiu
+      given-names: Cristiano G.
+    - family-names: Hoyle
+      given-names: Ben
+    - family-names: Kim
+      given-names: Juhan
+    - family-names: Li
+      given-names: Xiao-Dong
+  journal: "The Astrophysical Journal Supplement Series"
+  volume: 242
+  start: 29
+  year: 2019
+  doi: 10.3847/1538-4365/ab22b5
