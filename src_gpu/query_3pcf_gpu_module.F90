@@ -45,13 +45,20 @@ module query_3pcf_gpu_module
   use iso_fortran_env, only: int8, int64
   use config_module
   use csr_module
-  use query_3pcf_module, only: write_3pcf_results, write_equilateral_results
+  use query_3pcf_module, only: write_3pcf_results, write_equilateral_results, &
+                               write_3pcf_jackknife
   implicit none
 
   ! Number of independent accumulator copies; must comfortably exceed the
   ! count of concurrently resident gangs (16 blocks/SM × SM count; 4096
   ! covers >250-SM parts, and the host-side cost of extra slots is trivial).
   integer, parameter :: NSLOT_3PCF = 4096
+  ! The jackknife partials are indexed (bin, slot, region), so they cannot use
+  ! NSLOT_3PCF: at 84 bins x 400 regions that would be 1.1 TB. The region index
+  ! already spreads atomics ~njk ways, so far fewer slots suffice.
+  integer, parameter :: NSLOT_JK = 64
+  ! Refuse rather than silently exhaust device memory.
+  real(kdkind), parameter :: JK_MAX_GB = 4.0d0
 
 contains
 
@@ -76,6 +83,10 @@ contains
     ! Slot-strided partial accumulators (config_bins, NSLOT_3PCF); summed
     ! over slots on the host after the kernel.
     real(kdkind), allocatable :: part_nnn(:,:), part_rrr(:,:)
+    ! Jackknife partials (bin, slot, region) and per-triplet region labels.
+    real(kdkind), allocatable :: part_nnn_jk(:,:,:), part_rrr_jk(:,:,:)
+    integer :: njk_g, jslot, jr1, jr2, jr3, m
+    real(kdkind) :: jk_gb
 
     if (cfg%RSD) then
       print *, 'ERROR: query_graph_3pcf_gpu called with RSD mode; caller must route to CPU'
@@ -87,6 +98,24 @@ contains
 
     num_data_g    = cfg%num_data
     config_bins_g = cfg%config_bins
+    njk_g         = cfg%njk
+
+    if (njk_g > 0) then
+      jk_gb = 2.0d0 * real(config_bins_g, kdkind) * real(NSLOT_JK, kdkind) * &
+              real(njk_g, kdkind) * 8.0d0 / 1.0d9
+      if (cfg%rank == 0) print *, 'jackknife partials: ', jk_gb, ' GB on device'
+      if (jk_gb > JK_MAX_GB) then
+        print *, 'ERROR: jackknife partial arrays need ', jk_gb, &
+                 ' GB (limit ', JK_MAX_GB, '). Reduce -njk or the bin count, '// &
+                 'or lower NSLOT_JK.'
+        stop
+      end if
+    end if
+    ! Allocated unconditionally: the ACC data clauses name them either way.
+    allocate(part_nnn_jk(config_bins_g, NSLOT_JK, max(njk_g, 1)))
+    allocate(part_rrr_jk(config_bins_g, NSLOT_JK, max(njk_g, 1)))
+    part_nnn_jk = 0.0d0
+    part_rrr_jk = 0.0d0
 
     allocate(part_nnn(config_bins_g, NSLOT_3PCF))
     allocate(part_rrr(config_bins_g, NSLOT_3PCF))
@@ -102,11 +131,11 @@ contains
       ! Single-pass path: whole CSR fits on the device.
       ! =====================================================================
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, buffer, bintable) &
-      !$ACC& COPY(part_nnn, part_rrr)
+      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, buffer, bintable, region) &
+      !$ACC& COPY(part_nnn, part_rrr, part_nnn_jk, part_rrr_jk)
 
       !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(128) &
-      !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1)
+      !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1, jslot, jr1)
       do i = istart, iend
         if (buffer(i) == 1) cycle
 
@@ -115,6 +144,8 @@ contains
 
         base_i = csr_ptr(i) - 1
         slot   = mod(i - 1, NSLOT_3PCF) + 1
+        jslot  = mod(i - 1, NSLOT_JK) + 1
+        if (njk_g > 0) jr1 = region(i)
 
         do k1 = 1, nn_i
           ind1  = csr_dist(base_i + k1)
@@ -122,7 +153,7 @@ contains
           wi_w1 = weights(i) * weights(id1)
 
           ! All lanes search id1's adjacency list — same segment, coherent.
-          !$ACC LOOP VECTOR PRIVATE(k2, id2, bin, ind2, ind3, w3)
+          !$ACC LOOP VECTOR PRIVATE(k2, id2, bin, ind2, ind3, w3, jr2, jr3)
           do k2 = k1 + 1, nn_i
             ind2 = csr_dist(base_i + k2)
             id2  = csr_id  (base_i + k2)
@@ -136,9 +167,40 @@ contains
             !$ACC ATOMIC UPDATE
             part_nnn(bin, slot) = part_nnn(bin, slot) + w3
 
+            if (njk_g > 0) then
+              jr2 = region(id1)
+              jr3 = region(id2)
+              if (jr1 > 0) then
+                !$ACC ATOMIC UPDATE
+                part_nnn_jk(bin, jslot, jr1) = part_nnn_jk(bin, jslot, jr1) + w3
+              end if
+              if (jr2 > 0 .and. jr2 /= jr1) then
+                !$ACC ATOMIC UPDATE
+                part_nnn_jk(bin, jslot, jr2) = part_nnn_jk(bin, jslot, jr2) + w3
+              end if
+              if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                !$ACC ATOMIC UPDATE
+                part_nnn_jk(bin, jslot, jr3) = part_nnn_jk(bin, jslot, jr3) + w3
+              end if
+            end if
+
             if (i > num_data_g .and. id1 > num_data_g .and. id2 > num_data_g) then
               !$ACC ATOMIC UPDATE
               part_rrr(bin, slot) = part_rrr(bin, slot) - w3
+              if (njk_g > 0) then
+                if (jr1 > 0) then
+                  !$ACC ATOMIC UPDATE
+                  part_rrr_jk(bin, jslot, jr1) = part_rrr_jk(bin, jslot, jr1) - w3
+                end if
+                if (jr2 > 0 .and. jr2 /= jr1) then
+                  !$ACC ATOMIC UPDATE
+                  part_rrr_jk(bin, jslot, jr2) = part_rrr_jk(bin, jslot, jr2) - w3
+                end if
+                if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                  !$ACC ATOMIC UPDATE
+                  part_rrr_jk(bin, jslot, jr3) = part_rrr_jk(bin, jslot, jr3) - w3
+                end if
+              end if
             end if
           end do
         end do
@@ -163,8 +225,8 @@ contains
       allocate(stage_id(maxw), stage_dist(maxw))
 
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, weights, buffer, bintable) &
-      !$ACC& COPY(part_nnn, part_rrr)
+      !$ACC& COPYIN(csr_ptr, weights, buffer, bintable, region) &
+      !$ACC& COPY(part_nnn, part_rrr, part_nnn_jk, part_rrr_jk)
 
       do cw = 1, nwin
         ! ---- Stage the search window (rows whose lists get bsearched) ----
@@ -186,7 +248,7 @@ contains
 
           !$ACC DATA COPYIN(csr_id(elo_h:ehi_h), csr_dist(elo_h:ehi_h))
           !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(128) &
-          !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1)
+          !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1, jslot, jr1)
           do i = hublo, hubhi
             if (buffer(i) == 1) cycle
 
@@ -195,6 +257,8 @@ contains
 
             base_i = csr_ptr(i) - 1
             slot   = mod(i - 1, NSLOT_3PCF) + 1
+            jslot  = mod(i - 1, NSLOT_JK) + 1
+            if (njk_g > 0) jr1 = region(i)
 
             do k1 = 1, nn_i
               id1 = csr_id(base_i + k1)
@@ -204,7 +268,7 @@ contains
               ind1  = csr_dist(base_i + k1)
               wi_w1 = weights(i) * weights(id1)
 
-              !$ACC LOOP VECTOR PRIVATE(k2, id2, bin, ind2, ind3, w3)
+              !$ACC LOOP VECTOR PRIVATE(k2, id2, bin, ind2, ind3, w3, jr2, jr3)
               do k2 = k1 + 1, nn_i
                 ind2 = csr_dist(base_i + k2)
                 id2  = csr_id  (base_i + k2)
@@ -219,10 +283,41 @@ contains
                 !$ACC ATOMIC UPDATE
                 part_nnn(bin, slot) = part_nnn(bin, slot) + w3
 
+                if (njk_g > 0) then
+                  jr2 = region(id1)
+                  jr3 = region(id2)
+                  if (jr1 > 0) then
+                    !$ACC ATOMIC UPDATE
+                    part_nnn_jk(bin, jslot, jr1) = part_nnn_jk(bin, jslot, jr1) + w3
+                  end if
+                  if (jr2 > 0 .and. jr2 /= jr1) then
+                    !$ACC ATOMIC UPDATE
+                    part_nnn_jk(bin, jslot, jr2) = part_nnn_jk(bin, jslot, jr2) + w3
+                  end if
+                  if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                    !$ACC ATOMIC UPDATE
+                    part_nnn_jk(bin, jslot, jr3) = part_nnn_jk(bin, jslot, jr3) + w3
+                  end if
+                end if
+
                 if (i > num_data_g .and. id1 > num_data_g .and. &
                     id2 > num_data_g) then
                   !$ACC ATOMIC UPDATE
                   part_rrr(bin, slot) = part_rrr(bin, slot) - w3
+                  if (njk_g > 0) then
+                    if (jr1 > 0) then
+                      !$ACC ATOMIC UPDATE
+                      part_rrr_jk(bin, jslot, jr1) = part_rrr_jk(bin, jslot, jr1) - w3
+                    end if
+                    if (jr2 > 0 .and. jr2 /= jr1) then
+                      !$ACC ATOMIC UPDATE
+                      part_rrr_jk(bin, jslot, jr2) = part_rrr_jk(bin, jslot, jr2) - w3
+                    end if
+                    if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                      !$ACC ATOMIC UPDATE
+                      part_rrr_jk(bin, jslot, jr3) = part_rrr_jk(bin, jslot, jr3) - w3
+                    end if
+                  end if
                 end if
               end do
             end do
@@ -242,10 +337,19 @@ contains
       N2(bin, 1, 3) = N2(bin, 1, 3) + sum(part_nnn(bin, :))
       N3(bin, 1, 3) = N3(bin, 1, 3) + sum(part_rrr(bin, :))
     end do
+    if (njk_g > 0) then
+      do m = 1, njk_g
+        do bin = 1, config_bins_g
+          N2jk(bin, 1, 3, m) = N2jk(bin, 1, 3, m) + sum(part_nnn_jk(bin, :, m))
+          N3jk(bin, 1, 3, m) = N3jk(bin, 1, 3, m) + sum(part_rrr_jk(bin, :, m))
+        end do
+      end do
+    end if
 
-    deallocate(part_nnn, part_rrr)
+    deallocate(part_nnn, part_rrr, part_nnn_jk, part_rrr_jk)
 
     call write_3pcf_results()
+    call write_3pcf_jackknife()
   end subroutine query_graph_3pcf_gpu
 
 
@@ -259,6 +363,8 @@ contains
   ! ---------------------------------------------------------------------------
   subroutine query_graph_equilateral_gpu(istart, iend)
     integer, intent(in) :: istart, iend
+    ! -njk is implemented for the full 3PCF kernel only; refuse rather than
+    ! return zero-scatter realisations.
 
     integer :: i, k1, k2, nn_i, id1, id2, bin, slot
     integer(int64) :: base_i
@@ -275,10 +381,18 @@ contains
     integer(int8), allocatable :: stage_dist(:)
 
     real(kdkind), allocatable :: part_nnn(:,:), part_rrr(:,:)
+    ! Jackknife partials (bin, slot, region) and per-triplet region labels.
+    real(kdkind), allocatable :: part_nnn_jk(:,:,:), part_rrr_jk(:,:,:)
+    integer :: njk_g, jslot, jr1, jr2, jr3, m
+    real(kdkind) :: jk_gb
 
     if (cfg%RSD) then
       print *, 'ERROR: query_graph_equilateral_gpu called with RSD mode; caller must route to CPU'
       stop 1
+    end if
+    if (cfg%njk > 0) then
+      print *, 'ERROR: -njk is implemented for -3pcf, not -equi.'
+      stop
     end if
 
     if (cfg%rank == 0) print *, 'Performing equilateral 3PCF (GPU bsearch)'
@@ -302,7 +416,7 @@ contains
       ! =====================================================================
       !$ACC DATA &
       !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, buffer) &
-      !$ACC& COPY(part_nnn, part_rrr)
+      !$ACC& COPY(part_nnn, part_rrr, part_nnn_jk, part_rrr_jk)
 
       !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(128) &
       !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1)
@@ -335,9 +449,40 @@ contains
             !$ACC ATOMIC UPDATE
             part_nnn(bin, slot) = part_nnn(bin, slot) + w3
 
+            if (njk_g > 0) then
+              jr2 = region(id1)
+              jr3 = region(id2)
+              if (jr1 > 0) then
+                !$ACC ATOMIC UPDATE
+                part_nnn_jk(bin, jslot, jr1) = part_nnn_jk(bin, jslot, jr1) + w3
+              end if
+              if (jr2 > 0 .and. jr2 /= jr1) then
+                !$ACC ATOMIC UPDATE
+                part_nnn_jk(bin, jslot, jr2) = part_nnn_jk(bin, jslot, jr2) + w3
+              end if
+              if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                !$ACC ATOMIC UPDATE
+                part_nnn_jk(bin, jslot, jr3) = part_nnn_jk(bin, jslot, jr3) + w3
+              end if
+            end if
+
             if (i > num_data_g .and. id1 > num_data_g .and. id2 > num_data_g) then
               !$ACC ATOMIC UPDATE
               part_rrr(bin, slot) = part_rrr(bin, slot) - w3
+              if (njk_g > 0) then
+                if (jr1 > 0) then
+                  !$ACC ATOMIC UPDATE
+                  part_rrr_jk(bin, jslot, jr1) = part_rrr_jk(bin, jslot, jr1) - w3
+                end if
+                if (jr2 > 0 .and. jr2 /= jr1) then
+                  !$ACC ATOMIC UPDATE
+                  part_rrr_jk(bin, jslot, jr2) = part_rrr_jk(bin, jslot, jr2) - w3
+                end if
+                if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                  !$ACC ATOMIC UPDATE
+                  part_rrr_jk(bin, jslot, jr3) = part_rrr_jk(bin, jslot, jr3) - w3
+                end if
+              end if
             end if
           end do
         end do
@@ -363,7 +508,7 @@ contains
 
       !$ACC DATA &
       !$ACC& COPYIN(csr_ptr, weights, buffer) &
-      !$ACC& COPY(part_nnn, part_rrr)
+      !$ACC& COPY(part_nnn, part_rrr, part_nnn_jk, part_rrr_jk)
 
       do cw = 1, nwin
         idlo2 = split_id(cw)
@@ -383,7 +528,7 @@ contains
 
           !$ACC DATA COPYIN(csr_id(elo_h:ehi_h), csr_dist(elo_h:ehi_h))
           !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(128) &
-          !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1)
+          !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1, jslot, jr1)
           do i = hublo, hubhi
             if (buffer(i) == 1) cycle
 
@@ -392,6 +537,8 @@ contains
 
             base_i = csr_ptr(i) - 1
             slot   = mod(i - 1, NSLOT_3PCF) + 1
+            jslot  = mod(i - 1, NSLOT_JK) + 1
+            if (njk_g > 0) jr1 = region(i)
 
             do k1 = 1, nn_i
               id1 = csr_id(base_i + k1)
@@ -400,7 +547,7 @@ contains
               ind1  = csr_dist(base_i + k1)
               wi_w1 = weights(i) * weights(id1)
 
-              !$ACC LOOP VECTOR PRIVATE(k2, id2, bin, ind2, ind3, w3)
+              !$ACC LOOP VECTOR PRIVATE(k2, id2, bin, ind2, ind3, w3, jr2, jr3)
               do k2 = k1 + 1, nn_i
                 ind2 = csr_dist(base_i + k2)
                 if (ind2 /= ind1) cycle    ! equilateral filter before bsearch
@@ -416,10 +563,41 @@ contains
                 !$ACC ATOMIC UPDATE
                 part_nnn(bin, slot) = part_nnn(bin, slot) + w3
 
+                if (njk_g > 0) then
+                  jr2 = region(id1)
+                  jr3 = region(id2)
+                  if (jr1 > 0) then
+                    !$ACC ATOMIC UPDATE
+                    part_nnn_jk(bin, jslot, jr1) = part_nnn_jk(bin, jslot, jr1) + w3
+                  end if
+                  if (jr2 > 0 .and. jr2 /= jr1) then
+                    !$ACC ATOMIC UPDATE
+                    part_nnn_jk(bin, jslot, jr2) = part_nnn_jk(bin, jslot, jr2) + w3
+                  end if
+                  if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                    !$ACC ATOMIC UPDATE
+                    part_nnn_jk(bin, jslot, jr3) = part_nnn_jk(bin, jslot, jr3) + w3
+                  end if
+                end if
+
                 if (i > num_data_g .and. id1 > num_data_g .and. &
                     id2 > num_data_g) then
                   !$ACC ATOMIC UPDATE
                   part_rrr(bin, slot) = part_rrr(bin, slot) - w3
+                  if (njk_g > 0) then
+                    if (jr1 > 0) then
+                      !$ACC ATOMIC UPDATE
+                      part_rrr_jk(bin, jslot, jr1) = part_rrr_jk(bin, jslot, jr1) - w3
+                    end if
+                    if (jr2 > 0 .and. jr2 /= jr1) then
+                      !$ACC ATOMIC UPDATE
+                      part_rrr_jk(bin, jslot, jr2) = part_rrr_jk(bin, jslot, jr2) - w3
+                    end if
+                    if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                      !$ACC ATOMIC UPDATE
+                      part_rrr_jk(bin, jslot, jr3) = part_rrr_jk(bin, jslot, jr3) - w3
+                    end if
+                  end if
                 end if
               end do
             end do

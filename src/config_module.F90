@@ -66,6 +66,12 @@ module config_module
     ! Data dimensions
     integer :: num_data = 0
     integer :: num_rand = 0
+    ! Delete-one jackknife. Region labels are supplied per catalogue, 1..njk.
+    ! A triplet contributes to realisation m unless one of its three points
+    ! lies in region m, so a single pass yields all njk realisations:
+    !   N_m = N_total - (sum over triplets touching region m)
+    integer :: njk = 0
+    character(len=2000) :: jkgal = '', jkran = ''
   end type gramsci_config
 
   ! Singleton config instance
@@ -77,6 +83,10 @@ module config_module
   real(kdkind), allocatable :: weights(:), radial_bins(:)
   integer, allocatable :: buffer(:)
   real(kdkind), allocatable :: N2(:,:,:), N3(:,:,:)
+  ! Per-region sums of triplets TOUCHING each region (not the realisations
+  ! themselves); the realisations are formed by subtraction at write time.
+  real(kdkind), allocatable :: N2jk(:,:,:,:), N3jk(:,:,:,:)
+  integer, allocatable :: region(:)
   integer, allocatable :: bintable(:,:,:,:)
   ! 4PCF parity arrays
   real(kdkind), allocatable :: N4(:,:), R4(:,:)
@@ -165,6 +175,18 @@ contains
         cfg%rancat = .true.
         call get_value(arg)
         cfg%file2 = trim(arg)
+        i = i + 2
+      case ('-jkgal')
+        call getArgument(i+1, arg)
+        cfg%jkgal = trim(arg)
+        i = i + 2
+      case ('-jkran')
+        call getArgument(i+1, arg)
+        cfg%jkran = trim(arg)
+        i = i + 2
+      case ('-njk')
+        call getArgument(i+1, arg)
+        read(arg, *) cfg%njk
         i = i + 2
       case ('-out')
         call get_value(arg)
@@ -430,12 +452,25 @@ contains
     allocate(N3(cfg%config_bins, cfg%nmu, 3))
     N2 = 0.0d0
     N3 = 0.0d0
+    ! Always allocate: the OpenMP reduction clause in the query loop names
+    ! these arrays unconditionally, and reducing over an unallocated
+    ! allocatable segfaults. When jackknife is off they are a single dummy
+    ! slice that is never written (the guards are on cfg%njk > 0).
+    allocate(N2jk(cfg%config_bins, cfg%nmu, 3, max(cfg%njk, 1)))
+    allocate(N3jk(cfg%config_bins, cfg%nmu, 3, max(cfg%njk, 1)))
+    N2jk = 0.0d0
+    N3jk = 0.0d0
+    if (cfg%njk > 0 .and. cfg%rank == 0) &
+      print *, 'jackknife enabled: ', cfg%njk, ' regions'
   end subroutine allocate_result_arrays
 
   subroutine deallocate_arrays()
     implicit none
     if (allocated(N2)) deallocate(N2)
     if (allocated(N3)) deallocate(N3)
+    if (allocated(N2jk)) deallocate(N2jk)
+    if (allocated(N3jk)) deallocate(N3jk)
+    if (allocated(region)) deallocate(region)
     if (allocated(N4)) deallocate(N4)
     if (allocated(R4)) deallocate(R4)
     if (allocated(bintable6)) deallocate(bintable6)

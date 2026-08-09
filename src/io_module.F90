@@ -160,4 +160,64 @@ contains
     skip = (len_trim(t) == 0 .or. t(1:1) == '#')
   end function is_skippable
 
+    ! Read delete-one jackknife region labels, 1..cfg%njk, one integer per line,
+  ! in the same order as the corresponding catalogue. Points with a label
+  ! outside 1..njk (or with no label file) are treated as belonging to no
+  ! region, so they are never deleted -- that is the conservative choice.
+  subroutine read_jk_regions()
+    integer :: i, ios, unit_num, r, nbad
+    ! Allocated unconditionally: the OpenACC data clauses in the GPU kernel
+    ! name `region` whether or not jackknife is requested, and mapping an
+    ! unallocated allocatable is a runtime error.
+    allocate(region(cfg%num_data + cfg%num_rand))
+    region = 0
+    if (cfg%njk <= 0) return
+    nbad = 0
+    unit_num = 41
+    if (len_trim(cfg%jkgal) > 0) then
+      open(unit_num, file=trim(cfg%jkgal), status='old', iostat=ios)
+      if (ios /= 0) then
+        print *, 'ERROR: cannot open -jkgal file ', trim(cfg%jkgal)
+        stop
+      end if
+      do i = 1, cfg%num_data
+        read(unit_num, *, iostat=ios) r
+        if (ios /= 0) then
+          print *, 'ERROR: -jkgal file has fewer rows than the galaxy catalogue'
+          stop
+        end if
+        if (r < 1 .or. r > cfg%njk) then
+          nbad = nbad + 1
+        else
+          region(i) = r
+        end if
+      end do
+      close(unit_num)
+    end if
+    if (len_trim(cfg%jkran) > 0) then
+      open(unit_num, file=trim(cfg%jkran), status='old', iostat=ios)
+      if (ios /= 0) then
+        print *, 'ERROR: cannot open -jkran file ', trim(cfg%jkran)
+        stop
+      end if
+      do i = cfg%num_data + 1, cfg%num_data + cfg%num_rand
+        read(unit_num, *, iostat=ios) r
+        if (ios /= 0) then
+          print *, 'ERROR: -jkran file has fewer rows than the random catalogue'
+          stop
+        end if
+        if (r < 1 .or. r > cfg%njk) then
+          nbad = nbad + 1
+        else
+          region(i) = r
+        end if
+      end do
+      close(unit_num)
+    end if
+    if (cfg%rank == 0) then
+      print *, 'read jackknife regions; unassigned points: ', &
+               count(region == 0), ' out of range: ', nbad
+    end if
+  end subroutine read_jk_regions
+
 end module io_module
