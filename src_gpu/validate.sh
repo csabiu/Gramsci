@@ -49,8 +49,9 @@ run_test() {
   if python3 - <<PYEOF
 import sys, numpy as np
 tol = float("$TOL")
-cpu = np.loadtxt("$cpu_out", comments='r', ndmin=2)
-gpu = np.loadtxt("$gpu_out", comments='r', ndmin=2)
+# '#' marks the header; 'r' kept for outputs written before the header fix.
+cpu = np.loadtxt("$cpu_out", comments=('#', 'r'), ndmin=2)
+gpu = np.loadtxt("$gpu_out", comments=('#', 'r'), ndmin=2)
 if cpu.shape != gpu.shape:
     print(f"SHAPE MISMATCH: CPU {cpu.shape} vs GPU {gpu.shape}")
     sys.exit(1)

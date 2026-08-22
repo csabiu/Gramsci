@@ -10,13 +10,13 @@
 !   csr_id(e)                       — neighbor node index for edge e
 !   csr_dist(e)                     — distance-bin index (int8)
 !   csr_mu(e)                       — mu-bin index (int8)
-!   csr_phi(e)                       — direction-pixel index (int8, 4PCFp only)
+!   csr_phi(e)                       — direction-pixel index (int16, 4PCFp only)
 !
 ! call build_csr()           after create_graph()
 ! call deallocate_csr()      at cleanup
 ! ---------------------------------------------------------------------------
 module csr_module
-  use iso_fortran_env, only: int8, int64
+  use iso_fortran_env, only: int8, int16, int64
   use iso_c_binding, only: c_int, c_size_t
   use config_module
   implicit none
@@ -39,11 +39,13 @@ module csr_module
   integer, allocatable :: csr_id(:)         ! shape (total_edges)
   integer(int8), allocatable :: csr_dist(:) ! shape (total_edges)
   integer(int8), allocatable :: csr_mu(:)   ! shape (total_edges)
-  integer(int8), allocatable :: csr_phi(:)  ! shape (total_edges), 4PCFp only
+  integer(int16), allocatable :: csr_phi(:) ! shape (total_edges), 4PCFp only
   integer(int64) :: csr_total_edges = 0
 
   ! Device-memory sizing for the chunked GPU kernels.
   ! BYTES_PER_EDGE: csr_id (int32) + csr_dist (int8) per resident edge window.
+  ! (The parity hub window additionally carries csr_phi at 2 B/edge; the
+  ! callers budget for that explicitly — see query_4pcf_gpu_module.)
   ! RESERVE_BYTES: csr_ptr + weights + buffer + partial accumulators + CUDA
   ! context — generously over-budgeted.
   integer(int64), parameter :: BYTES_PER_EDGE = 5_int64
@@ -79,7 +81,8 @@ contains
     allocate(csr_id(csr_total_edges))
     allocate(csr_dist(csr_total_edges))
     if (want_mu) allocate(csr_mu(csr_total_edges))
-    if (cfg%four_pcf_parity) allocate(csr_phi(csr_total_edges))
+    if (cfg%four_pcf_parity .and. .not. cfg%exact_parity) &
+      allocate(csr_phi(csr_total_edges))
 
     ! Pass 2: copy from jagged output(:), freeing each row as we go
     do i = 1, N
@@ -93,7 +96,7 @@ contains
           csr_mu(base + k) = output(i)%mu(k)
         end do
       end if
-      if (cfg%four_pcf_parity .and. allocated(output(i)%phi)) then
+      if (allocated(csr_phi) .and. allocated(output(i)%phi)) then
         do k = 1, output(i)%nn
           csr_phi(base + k) = output(i)%phi(k)
         end do

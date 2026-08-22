@@ -85,9 +85,10 @@ program Ngramsci
       integer :: bpe
       real(kdkind) :: mem_half_gb, mem_peak_gb
       ! Bytes per stored neighbor edge:
-      !   id(int32=4B) + dist(int8=1B) + mu(int8=1B) [+ phi(int8=1B) for parity]
+      !   id(int32=4B) + dist(int8=1B) + mu(int8=1B) [+ phi(int16=2B) for parity]
       bpe = 6
-      if (cfg%four_pcf_parity) bpe = 7
+      ! -exactparity stores no per-edge direction index
+      if (cfg%four_pcf_parity .and. .not. cfg%exact_parity) bpe = 8
       ! Half-graph stores only edges where neighbor_id > hub_id → 0.5x entries
       mem_half_gb = dble(cfg%num_data + cfg%num_rand) * avg_neighbors &
                     * dble(bpe) * 0.5d0 / 1073741824.0d0
@@ -133,6 +134,8 @@ program Ngramsci
   print '("Creating the graph took ",f12.3," seconds.")', (finish - start) / threads
 
   call kdtree2_destroy(kd_tree)
+  if (cfg%exact_parity .and. cfg%four_pcf_parity) &
+    call init_exact_parity_positions()
   deallocate(points)
 
   if (cfg%rank == 0) print *, 'finished building node relationships '

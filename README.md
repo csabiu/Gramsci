@@ -109,6 +109,8 @@ bin/gramsci -gal galaxies.dat -ran randoms.dat \
 | `-2pcf`             | 2-point correlation function                             |
 | `-3pcf` / `-equi`   | 3PCF (all triangles) / equilateral only                  |
 | `-4pcf` / `-4pcfp`  | 4PCF / 4PCF with parity decomposition                    |
+| `-ntheta <N>` / `-nphi <M>` | direction-pixel grid for `-4pcfp` (default 4×16, `N*M ≤ 32767`) |
+| `-exactparity`      | parity sign from exact positions instead of pixelized directions |
 
 Query modes can be **combined** in one run — the KD-tree and neighbor graph
 (usually the dominant cost) are built once and every query reuses them. With a
@@ -185,9 +187,18 @@ GRAMSCI runs in two phases:
    without the original coordinates — a compact, cache-friendly structure
    optimised for combinatorial enumeration.
 
-For the parity 4PCF, each edge also stores a one-byte "direction pixel" encoding
+For the parity 4PCF, each edge also stores a two-byte "direction pixel" encoding
 the displacement direction, enabling chirality classification without retaining
-coordinates.
+coordinates. The grid defaults to 4×16 pixels and is set with `-ntheta`/`-nphi`.
+A coarse grid attenuates the recovered parity-odd amplitude for tetrahedra whose
+three spoke directions are nearly coplanar (measured: ~13% and ~9% loss for the
+most degenerate shapes at 4×16, gone by 8×32) and discards those whose pixelized
+volume is exactly zero (6.8% of tetrahedra at 4×16, 1.4% at 8×32, 0.12% at
+23×91). Alternatively `-exactparity` evaluates the signed volume directly from
+the galaxy positions: no attenuation, nothing discarded, and no per-edge index at
+all — the graph reverts to 5 bytes/edge and 24 bytes/point of coordinates are
+kept instead, a net saving of roughly a quarter of a DESI-sized parity graph, for
+~8% more query time.
 
 ## GPU builds
 

@@ -11,8 +11,13 @@ module query_4pcf_module
   ! have no defined chirality and contribute 0 to the parity-odd channel.
   ! Pixelized directions make exact-zero volumes common (repeated pixels,
   ! equatorial/coplanar pixel triples); deciding their sign from the floating-
-  ! point residue would make the odd channel compiler-dependent noise.  True
-  ! nonzero pixel volumes are >~1e-5 for practical grids; fp noise is ~1e-16.
+  ! point residue would make the odd channel compiler-dependent noise.  The
+  ! smallest GENUINELY nonzero pixel-triple volume shrinks with grid
+  ! resolution -- measured 3.4e-3 at 4x16, 1.2e-4 at 8x32, 4.6e-6 at 16x64,
+  ! 4.3e-8 at 23x91 and 5.2e-8 at the 128x256 int16 cap -- so the fixed
+  ! tolerance stays at least ~40x below any legitimate configuration for every
+  ! grid this build accepts, while sitting ~1e7 above fp noise (~1e-16).
+  ! Under -exactparity it only ever catches genuinely coplanar quadruplets.
   real(kdkind), parameter :: VOL_DEGEN_TOL = 1.0d-9
 
   ! ---------------------------------------------------------------------------
@@ -88,6 +93,8 @@ module query_4pcf_module
   ! Computed once at initialisation by init_direction_lookup().
   ! ---------------------------------------------------------------------------
   real(kdkind), allocatable :: dir_x(:), dir_y(:), dir_z(:)
+  ! Position snapshot for -exactparity (filled before points is deallocated)
+  real(kdkind), allocatable :: px(:), py(:), pz(:)
 
 contains
 
@@ -115,10 +122,26 @@ contains
     end do
 
     if (cfg%rank == 0) then
-      print *, '4PCF parity: direction pixels =', cfg%n_dir_pixels, &
-               ' (n_theta=', cfg%n_theta_dir, ', n_phi=', cfg%n_phi_dir, ')'
+      print '(" 4PCF parity: direction pixels = ",i0," (n_theta=",i0, &
+             &", n_phi=",i0,")")', &
+             cfg%n_dir_pixels, cfg%n_theta_dir, cfg%n_phi_dir
     end if
   end subroutine init_direction_lookup
+
+  ! ---------------------------------------------------------------------------
+  ! Snapshot galaxy+random positions into 1D arrays for -exactparity.
+  ! Must be called after graph construction, before points is deallocated.
+  ! ---------------------------------------------------------------------------
+  subroutine init_exact_parity_positions()
+    integer :: n
+    n = cfg%num_data + cfg%num_rand
+    allocate(px(n), py(n), pz(n))
+    px = points(1, 1:n)
+    py = points(2, 1:n)
+    pz = points(3, 1:n)
+    if (cfg%rank == 0) &
+      print *, '4PCF parity: exact signed volume from positions (-exactparity)'
+  end subroutine init_exact_parity_positions
 
   ! ---------------------------------------------------------------------------
   ! Build the 6D lookup table bintable6(n,n,n,n,n,n) where n = cfg%nbins.
@@ -363,7 +386,10 @@ contains
     integer :: raw_bin, config_idx, parity_flip, sign_V
     integer :: p1, p2, p3
     real(kdkind) :: w4, vol
+    real(kdkind) :: u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn
+    logical :: exact_g
 
+    exact_g = cfg%exact_parity
     if (cfg%rank == 0) print *, 'Performing 4PCF parity (binary-search)'
     if (cfg%rank == 0) print *, 'begin querying the graph'
 
@@ -371,8 +397,10 @@ contains
     !$OMP& private(i, k1, k2, k3, nn2, id1, id2, id3, &
     !$OMP&         ind1, ind2, ind3, ind4, ind5, ind6, &
     !$OMP&         raw_bin, config_idx, parity_flip, sign_V, &
-    !$OMP&         p1, p2, p3, w4, vol) &
-    !$OMP& shared(weights, output, buffer, cfg, bintable6, dir_x, dir_y, dir_z) &
+    !$OMP&         p1, p2, p3, w4, vol, &
+    !$OMP&         u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn) &
+    !$OMP& shared(weights, output, buffer, cfg, bintable6, dir_x, dir_y, dir_z, &
+    !$OMP&        px, py, pz, exact_g) &
     !$OMP& reduction(+:N4, R4)
     do i = istart, iend
       if (buffer(i) == 1) cycle
@@ -405,13 +433,27 @@ contains
             config_idx = abs(raw_bin)
             parity_flip = sign(1, raw_bin)
 
-            p1 = output(i)%phi(k1)
-            p2 = output(i)%phi(k2)
-            p3 = output(i)%phi(k3)
-
-            vol = dir_x(p1) * (dir_y(p2)*dir_z(p3) - dir_z(p2)*dir_y(p3)) &
-                + dir_y(p1) * (dir_z(p2)*dir_x(p3) - dir_x(p2)*dir_z(p3)) &
-                + dir_z(p1) * (dir_x(p2)*dir_y(p3) - dir_y(p2)*dir_x(p3))
+            if (exact_g) then
+              u1x = px(id1) - px(i); u1y = py(id1) - py(i); u1z = pz(id1) - pz(i)
+              rn  = 1.0d0 / sqrt(u1x*u1x + u1y*u1y + u1z*u1z)
+              u1x = u1x * rn; u1y = u1y * rn; u1z = u1z * rn
+              u2x = px(id2) - px(i); u2y = py(id2) - py(i); u2z = pz(id2) - pz(i)
+              rn  = 1.0d0 / sqrt(u2x*u2x + u2y*u2y + u2z*u2z)
+              u2x = u2x * rn; u2y = u2y * rn; u2z = u2z * rn
+              u3x = px(id3) - px(i); u3y = py(id3) - py(i); u3z = pz(id3) - pz(i)
+              rn  = 1.0d0 / sqrt(u3x*u3x + u3y*u3y + u3z*u3z)
+              u3x = u3x * rn; u3y = u3y * rn; u3z = u3z * rn
+              vol = u1x * (u2y*u3z - u2z*u3y) &
+                  + u1y * (u2z*u3x - u2x*u3z) &
+                  + u1z * (u2x*u3y - u2y*u3x)
+            else
+              p1 = output(i)%phi(k1)
+              p2 = output(i)%phi(k2)
+              p3 = output(i)%phi(k3)
+              vol = dir_x(p1) * (dir_y(p2)*dir_z(p3) - dir_z(p2)*dir_y(p3)) &
+                  + dir_y(p1) * (dir_z(p2)*dir_x(p3) - dir_x(p2)*dir_z(p3)) &
+                  + dir_z(p1) * (dir_x(p2)*dir_y(p3) - dir_y(p2)*dir_x(p3))
+            end if
 
             if (abs(vol) < VOL_DEGEN_TOL) then
               sign_V = 0   ! degenerate: no chirality, odd channel gets 0
@@ -455,11 +497,14 @@ contains
     integer :: raw_bin, config_idx, parity_flip, sign_V
     integer :: p1, p2, p3
     real(kdkind) :: w4, vol
+    real(kdkind) :: u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn
+    logical :: exact_g
 
     if (.not. cfg%half_graph) then
       print *, 'ERROR: merge-walk 4PCF parity requires half_graph=.true.'
       stop 1
     end if
+    exact_g = cfg%exact_parity
     if (cfg%rank == 0) print *, 'Performing 4PCF parity (all configurations, merge-walk)'
     if (cfg%rank == 0) print *, 'begin querying the graph'
 
@@ -468,8 +513,10 @@ contains
     !$OMP&         a, b, alpha, beta, gamma, ha, hb, hc, &
     !$OMP&         ind1, ind2, ind3, ind4, ind5, ind6, &
     !$OMP&         raw_bin, config_idx, parity_flip, sign_V, &
-    !$OMP&         p1, p2, p3, w4, vol) &
-    !$OMP& shared(weights, output, buffer, cfg, bintable6, dir_x, dir_y, dir_z) &
+    !$OMP&         p1, p2, p3, w4, vol, &
+    !$OMP&         u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn) &
+    !$OMP& shared(weights, output, buffer, cfg, bintable6, dir_x, dir_y, dir_z, &
+    !$OMP&        px, py, pz, exact_g) &
     !$OMP& reduction(+:N4, R4)
     do i = istart, iend
       if (buffer(i) == 1) cycle
@@ -479,8 +526,14 @@ contains
       do k1 = 1, nn2
         ind1   = output(i)%dist(k1)
         id1    = output(i)%id(k1)
-        p1     = output(i)%phi(k1)
         nn_id1 = output(id1)%nn
+        if (exact_g) then
+          u1x = px(id1) - px(i)
+          u1y = py(id1) - py(i)
+          u1z = pz(id1) - pz(i)
+          rn  = 1.0d0 / sqrt(u1x*u1x + u1y*u1y + u1z*u1z)
+          u1x = u1x * rn; u1y = u1y * rn; u1z = u1z * rn
+        end if
 
         ! k2: 2-way merge walk
         a = k1 + 1
@@ -490,8 +543,14 @@ contains
             ind2   = output(i)%dist(a)
             ind4   = output(id1)%dist(b)
             id2    = output(i)%id(a)
-            p2     = output(i)%phi(a)
             nn_id2 = output(id2)%nn
+            if (exact_g) then
+              u2x = px(id2) - px(i)
+              u2y = py(id2) - py(i)
+              u2z = pz(id2) - pz(i)
+              rn  = 1.0d0 / sqrt(u2x*u2x + u2y*u2y + u2z*u2z)
+              u2x = u2x * rn; u2y = u2y * rn; u2z = u2z * rn
+            end if
 
             ! k3: 3-way merge walk
             alpha = a + 1
@@ -511,15 +570,27 @@ contains
                 ind3 = output(i)%dist(alpha)
                 ind5 = output(id1)%dist(beta)
                 ind6 = output(id2)%dist(gamma)
-                p3   = output(i)%phi(alpha)
-
                 raw_bin     = bintable6(ind1, ind2, ind3, ind4, ind5, ind6)
                 config_idx  = abs(raw_bin)
                 parity_flip = sign(1, raw_bin)
 
-                vol = dir_x(p1) * (dir_y(p2)*dir_z(p3) - dir_z(p2)*dir_y(p3)) &
-                    + dir_y(p1) * (dir_z(p2)*dir_x(p3) - dir_x(p2)*dir_z(p3)) &
-                    + dir_z(p1) * (dir_x(p2)*dir_y(p3) - dir_y(p2)*dir_x(p3))
+                if (exact_g) then
+                  u3x = px(ha) - px(i)
+                  u3y = py(ha) - py(i)
+                  u3z = pz(ha) - pz(i)
+                  rn  = 1.0d0 / sqrt(u3x*u3x + u3y*u3y + u3z*u3z)
+                  u3x = u3x * rn; u3y = u3y * rn; u3z = u3z * rn
+                  vol = u1x * (u2y*u3z - u2z*u3y) &
+                      + u1y * (u2z*u3x - u2x*u3z) &
+                      + u1z * (u2x*u3y - u2y*u3x)
+                else
+                  p1 = output(i)%phi(k1)
+                  p2 = output(i)%phi(a)
+                  p3 = output(i)%phi(alpha)
+                  vol = dir_x(p1) * (dir_y(p2)*dir_z(p3) - dir_z(p2)*dir_y(p3)) &
+                      + dir_y(p1) * (dir_z(p2)*dir_x(p3) - dir_x(p2)*dir_z(p3)) &
+                      + dir_z(p1) * (dir_x(p2)*dir_y(p3) - dir_y(p2)*dir_x(p3))
+                end if
 
                 if (abs(vol) < VOL_DEGEN_TOL) then
                   sign_V = 0   ! degenerate: no chirality, odd channel gets 0
@@ -959,6 +1030,9 @@ contains
   ! ---------------------------------------------------------------------------
   subroutine cleanup_direction_lookup()
     if (allocated(dir_x)) deallocate(dir_x)
+    if (allocated(px)) deallocate(px)
+    if (allocated(py)) deallocate(py)
+    if (allocated(pz)) deallocate(pz)
     if (allocated(dir_y)) deallocate(dir_y)
     if (allocated(dir_z)) deallocate(dir_z)
   end subroutine cleanup_direction_lookup

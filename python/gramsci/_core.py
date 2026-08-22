@@ -61,8 +61,9 @@ def _load(path, stdout=''):
             f"gramsci did not produce output at {path}. Binary output:\n"
             f"{stdout[-2000:]}"
         )
-    # every header line (provenance block + column names) starts with '#'
-    return np.loadtxt(path)
+    # '#' marks the provenance block and column names; 'r' keeps outputs
+    # written by older builds (whose header wrapped across lines) readable.
+    return np.loadtxt(path, comments=('#', 'r'), ndmin=2)
 
 
 def _box_arg(box):
@@ -291,7 +292,8 @@ def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
 
 
 def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
-                 rmin=1.0, rmax=30.0, nbins=3, parity=False, box=None, binary=None):
+                 rmin=1.0, rmax=30.0, nbins=3, parity=False, box=None,
+                 binary=None, ntheta=None, nphi=None, exact_parity=False):
     """Compute the 4-point correlation function.
 
     Parameters
@@ -307,6 +309,12 @@ def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
                  analytically and no random catalog is needed.  Requires
                  rmax <= L/4.
     binary     : str or Path
+    ntheta, nphi : int, optional — direction-pixel grid for the parity channel
+        (default 4 x 16; the product must be <= 32767).  Finer grids reduce the
+        chirality attenuation of near-degenerate tetrahedra.
+    exact_parity : bool — compute the parity sign from the exact galaxy
+        positions instead of pixelized directions.  No attenuation and no
+        discarded tetrahedra; ignores ntheta/nphi.
 
     Returns
     -------
@@ -327,6 +335,13 @@ def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
                 '-rmin', str(rmin), '-rmax', str(rmax),
                 '-nbins', str(nbins),
                 '-out', out, flag]
+        if parity:
+            if exact_parity:
+                args.append('-exactparity')
+            if ntheta is not None:
+                args += ['-ntheta', str(ntheta)]
+            if nphi is not None:
+                args += ['-nphi', str(nphi)]
         if randoms_pos is not None:
             ran = os.path.join(tmp, 'rand.ran')
             _write_catalog(ran, randoms_pos, randoms_weights)

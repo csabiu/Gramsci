@@ -38,3 +38,7 @@ example/result*
 example/gauss.*
 tests/tmp_*
 tests/bench_*
+
+# validate.sh fixtures (regenerate with tests/make_validate_fixtures.py)
+tests/test.gal
+tests/test.ran

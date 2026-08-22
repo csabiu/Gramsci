@@ -54,7 +54,7 @@ module query_4pcf_gpu_module
   use csr_module
   use query_4pcf_module, only: &
     write_4pcf_results, write_4pcf_results_noparity, &
-    dir_x, dir_y, dir_z, VOL_DEGEN_TOL
+    dir_x, dir_y, dir_z, VOL_DEGEN_TOL, px, py, pz
   implicit none
 
 contains
@@ -74,7 +74,7 @@ contains
 
     ! Runtime sizing
     integer :: max_nn, ngang, nwin, env_stat
-    integer(int64) :: mnn2, lmat_bytes, freeb, win_edges, csr_bytes
+    integer(int64) :: mnn2, lmat_bytes, freeb, win_edges
     character(32) :: env
 
     ! Chunking bookkeeping
@@ -108,7 +108,6 @@ contains
     max_nn = max(csr_max_row_len(), 1)
     mnn2   = int(max_nn, int64)**2
     freeb  = gpu_free_mem_bytes()
-    csr_bytes = csr_total_edges * BYTES_PER_EDGE
 
     if (freeb < 0) then
       ngang = 1024        ! host fallback: no device limit, modest scratch
@@ -390,7 +389,7 @@ contains
   ! p1/p2/p3 all come from the HUB's own row (csr_phi), so the chunked hub
   ! window carries csr_phi sections while the staged search windows need only
   ! id+dist.  Window sizing uses 4 resident-window budgets to absorb the extra
-  ! byte/edge of the hub window's phi section.
+  ! two bytes/edge of the hub window's int16 phi section (7+5+5 <= 4x5).
   ! ---------------------------------------------------------------------------
   subroutine query_graph_4pcf_parity_gpu(istart, iend)
     integer, intent(in) :: istart, iend
@@ -401,7 +400,8 @@ contains
     integer(int8) :: ind1, ind2, ind3, ind4, ind5, ind6
     integer :: p1, p2, p3, raw_bin
     real(kdkind) :: w12, w4, vol
-    logical :: rand12
+    real(kdkind) :: u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn1, rn3
+    logical :: rand12, exact_g
     integer :: num_data_g, n_configs_g
 
     ! Runtime sizing
@@ -413,12 +413,15 @@ contains
     integer :: cw1, cw2, hw, do1b
     integer :: w1lo, w1hi, w2lo, w2hi, hublo, hubhi
     integer(int64) :: off1, off2, n1, n2, maxw, elo_h, ehi_h
+    integer(int64) :: pelo, pehi   ! csr_phi window (degenerate under -exactparity)
     integer, allocatable :: split_id(:)
     integer(int64), allocatable :: split_e(:)
     integer, allocatable :: stage1_id(:), stage2_id(:)
     integer(int8), allocatable :: stage1_dist(:), stage2_dist(:)
 
     integer(int8), allocatable :: lmat_g(:,:,:)
+    ! Per-gang spoke unit vectors for -exactparity
+    real(kdkind), allocatable :: ug(:,:,:)
     ! Per-gang partials, channel 1 = even, channel 2 = parity-odd.
     real(kdkind), allocatable :: part_n4(:,:,:), part_r4(:,:,:)
 
@@ -432,6 +435,10 @@ contains
 
     num_data_g  = cfg%num_data
     n_configs_g = cfg%n_configs_4pcf
+    exact_g     = cfg%exact_parity
+    ! dummies so the COPYIN clauses are always valid
+    if (.not. allocated(px)) allocate(px(1), py(1), pz(1))
+    if (.not. allocated(csr_phi)) allocate(csr_phi(1))
 
     ! ---- Runtime sizing (see query_graph_4pcf_gpu) ----------------------
     max_nn = max(csr_max_row_len(), 1)
@@ -446,18 +453,28 @@ contains
     end if
     lmat_bytes = int(ngang, int64) * mnn2
 
-    ! 4 window budgets: hub window costs 6 B/edge (id+dist+phi), the two
-    ! staged search windows 5 B/edge — a 4×5 B budget covers 6+5+5 with slack.
+    ! 4 window budgets: hub window costs 7 B/edge (id 4 + dist 1 + phi 2), the
+    ! two staged search windows 5 B/edge — a 4×5 B budget covers 7+5+5 with
+    ! slack.
     win_edges = csr_edge_window(4, lmat_bytes)
     nwin = int((csr_total_edges - 1) / win_edges) + 1
     call get_environment_variable('GRAMSCI_GPU_WIN_EDGES', env, status=env_stat)
-    if (env_stat /= 0 .and. nwin > 1 .and. nwin <= 3) nwin = 1
+    ! Collapse to a single pass only if the resident window really fits: 7 B/edge
+    ! against the 20 B/edge budget win_edges was derived from.  The previous
+    ! `nwin <= 3` test admitted up to 6 B/edge and over-commits at int16 phi.
+    if (env_stat /= 0 .and. nwin > 1 .and. &
+        csr_total_edges * 7_int64 <= win_edges * 20_int64) nwin = 1
 
     if (cfg%rank == 0) &
       print '("4PCFp GPU: max_nn=",i0,"  gangs=",i0,"  lmat scratch=",f6.2," GB",'// &
             '"  windows=",i0)', max_nn, ngang, real(lmat_bytes, kdkind)/1.0d9, nwin
 
     allocate(lmat_g(max_nn, max_nn, ngang))
+    if (exact_g) then
+      allocate(ug(max_nn, 3, ngang))
+    else
+      allocate(ug(1, 3, 1))
+    end if
     allocate(part_n4(n_configs_g, 2, ngang))
     allocate(part_r4(n_configs_g, 2, ngang))
     part_n4 = 0.0d0
@@ -469,12 +486,13 @@ contains
       ! =====================================================================
       !$ACC DATA &
       !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, csr_phi, weights, buffer, &
-      !$ACC&        bintable6, dir_x, dir_y, dir_z) &
-      !$ACC& CREATE(lmat_g) COPY(part_n4, part_r4)
+      !$ACC&        bintable6, dir_x, dir_y, dir_z, px, py, pz) &
+      !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4)
 
       !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(64) &
       !$ACC& PRIVATE(ig, i, k1, k2, nn_i, id1, id2, base_i, &
-      !$ACC&         ind1, ind2, ind4, p1, p2, w12, rand12)
+      !$ACC&         ind1, ind2, ind4, p1, p2, w12, rand12, &
+      !$ACC&         u1x, u1y, u1z, u2x, u2y, u2z, rn1)
       do ig = 1, ngang
         do i = istart + ig - 1, iend, ngang
           if (buffer(i) == 1) cycle
@@ -494,24 +512,48 @@ contains
             end do
           end do
 
+          ! ---- Phase 1p: spoke unit vectors for -exactparity -------------
+          if (exact_g) then
+            !$ACC LOOP VECTOR PRIVATE(k1, id1, u3x, u3y, u3z, rn3)
+            do k1 = 1, nn_i
+              id1 = csr_id(base_i + k1)
+              u3x = px(id1) - px(i)
+              u3y = py(id1) - py(i)
+              u3z = pz(id1) - pz(i)
+              rn3 = 1.0d0 / sqrt(u3x*u3x + u3y*u3y + u3z*u3z)
+              ug(k1, 1, ig) = u3x * rn3
+              ug(k1, 2, ig) = u3y * rn3
+              ug(k1, 3, ig) = u3z * rn3
+            end do
+          end if
+
           ! ---- Phase 2: triple loop with parity channel ------------------
           do k1 = 1, nn_i
             ind1 = csr_dist(base_i + k1)
             id1  = csr_id  (base_i + k1)
-            p1   = int(csr_phi(base_i + k1))
+            if (exact_g) then
+              u1x = ug(k1, 1, ig); u1y = ug(k1, 2, ig); u1z = ug(k1, 3, ig)
+            else
+              p1 = int(csr_phi(base_i + k1))
+            end if
 
             do k2 = k1 + 1, nn_i
               ind4 = lmat_g(k2, k1, ig)
               if (ind4 == 0) cycle
               ind2 = csr_dist(base_i + k2)
               id2  = csr_id  (base_i + k2)
-              p2   = int(csr_phi(base_i + k2))
+              if (exact_g) then
+                u2x = ug(k2, 1, ig); u2y = ug(k2, 2, ig); u2z = ug(k2, 3, ig)
+              else
+                p2 = int(csr_phi(base_i + k2))
+              end if
               w12  = weights(i) * weights(id1) * weights(id2)
               rand12 = (i > num_data_g .and. id1 > num_data_g .and. &
                         id2 > num_data_g)
 
               !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, raw_bin, &
-              !$ACC&   parity_flip, sign_V, ind3, ind5, ind6, p3, w4, vol)
+              !$ACC&   parity_flip, sign_V, ind3, ind5, ind6, p3, w4, vol, &
+              !$ACC&   u3x, u3y, u3z, rn3)
               do k3 = k2 + 1, nn_i
                 ind5 = lmat_g(k3, k1, ig)
                 if (ind5 == 0) cycle
@@ -526,10 +568,18 @@ contains
                 if (config_idx == 0) cycle
                 parity_flip = sign(1, raw_bin)
 
-                p3 = int(csr_phi(base_i + k3))
-                vol = dir_x(p1) * (dir_y(p2)*dir_z(p3) - dir_z(p2)*dir_y(p3)) &
-                    + dir_y(p1) * (dir_z(p2)*dir_x(p3) - dir_x(p2)*dir_z(p3)) &
-                    + dir_z(p1) * (dir_x(p2)*dir_y(p3) - dir_y(p2)*dir_x(p3))
+                id3 = csr_id(base_i + k3)
+                if (exact_g) then
+                  u3x = ug(k3, 1, ig); u3y = ug(k3, 2, ig); u3z = ug(k3, 3, ig)
+                  vol = u1x * (u2y*u3z - u2z*u3y) &
+                      + u1y * (u2z*u3x - u2x*u3z) &
+                      + u1z * (u2x*u3y - u2y*u3x)
+                else
+                  p3 = int(csr_phi(base_i + k3))
+                  vol = dir_x(p1) * (dir_y(p2)*dir_z(p3) - dir_z(p2)*dir_y(p3)) &
+                      + dir_y(p1) * (dir_z(p2)*dir_x(p3) - dir_x(p2)*dir_z(p3)) &
+                      + dir_z(p1) * (dir_x(p2)*dir_y(p3) - dir_y(p2)*dir_x(p3))
+                end if
                 if (abs(vol) < VOL_DEGEN_TOL) then
                   sign_V = 0   ! degenerate: no chirality, odd channel gets 0
                 else if (vol > 0.0d0) then
@@ -538,7 +588,6 @@ contains
                   sign_V = -1
                 end if
 
-                id3 = csr_id(base_i + k3)
                 w4  = w12 * weights(id3)
 
                 !$ACC ATOMIC UPDATE
@@ -576,14 +625,15 @@ contains
       end do
       if (cfg%rank == 0) &
         print '("4PCFp GPU chunked: ",i0," windows (",i0," tiles), window <= ",f6.2," GB")', &
-              nwin, nwin * nwin * (nwin + 1) / 2, real(maxw, kdkind) * 6.0d0 / 1.0d9
+              nwin, nwin * nwin * (nwin + 1) / 2, real(maxw, kdkind) * 7.0d0 / 1.0d9
 
       allocate(stage1_id(maxw), stage1_dist(maxw))
       allocate(stage2_id(maxw), stage2_dist(maxw))
 
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, weights, buffer, bintable6, dir_x, dir_y, dir_z) &
-      !$ACC& CREATE(lmat_g) COPY(part_n4, part_r4)
+      !$ACC& COPYIN(csr_ptr, weights, buffer, bintable6, dir_x, dir_y, dir_z, &
+      !$ACC&        px, py, pz) &
+      !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4)
 
       do cw1 = 1, nwin
         w1lo = split_id(cw1)
@@ -615,12 +665,21 @@ contains
             if (hublo > hubhi) cycle
             elo_h = split_e(hw)
             ehi_h = split_e(hw + 1) - 1
+            ! csr_phi is a 1-element dummy under -exactparity (not stored)
+            if (exact_g) then
+              pelo = 1_int64
+              pehi = 1_int64
+            else
+              pelo = elo_h
+              pehi = ehi_h
+            end if
 
             !$ACC DATA COPYIN(csr_id(elo_h:ehi_h), csr_dist(elo_h:ehi_h), &
-            !$ACC&            csr_phi(elo_h:ehi_h))
+            !$ACC&            csr_phi(pelo:pehi))
             !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(64) &
             !$ACC& PRIVATE(ig, i, k1, k2, nn_i, id1, id2, base_i, &
-            !$ACC&         ind1, ind2, ind4, p1, p2, w12, rand12)
+            !$ACC&         ind1, ind2, ind4, p1, p2, w12, rand12, &
+            !$ACC&         u1x, u1y, u1z, u2x, u2y, u2z, rn1)
             do ig = 1, ngang
               do i = hublo + ig - 1, hubhi, ngang
                 if (buffer(i) == 1) cycle
@@ -655,12 +714,31 @@ contains
                   end do
                 end if
 
+                ! ---- Phase 1p: spoke unit vectors for -exactparity ---------
+                if (exact_g) then
+                  !$ACC LOOP VECTOR PRIVATE(k1, id1, u3x, u3y, u3z, rn3)
+                  do k1 = 1, nn_i
+                    id1 = csr_id(base_i + k1)
+                    u3x = px(id1) - px(i)
+                    u3y = py(id1) - py(i)
+                    u3z = pz(id1) - pz(i)
+                    rn3 = 1.0d0 / sqrt(u3x*u3x + u3y*u3y + u3z*u3z)
+                    ug(k1, 1, ig) = u3x * rn3
+                    ug(k1, 2, ig) = u3y * rn3
+                    ug(k1, 3, ig) = u3z * rn3
+                  end do
+                end if
+
                 ! ---- Phase 2: pairs with id1 in cw1, id2 in cw2 ------------
                 do k1 = 1, nn_i
                   id1 = csr_id(base_i + k1)
                   if (id1 < w1lo .or. id1 > w1hi) cycle
                   ind1 = csr_dist(base_i + k1)
-                  p1   = int(csr_phi(base_i + k1))
+                  if (exact_g) then
+                    u1x = ug(k1, 1, ig); u1y = ug(k1, 2, ig); u1z = ug(k1, 3, ig)
+                  else
+                    p1 = int(csr_phi(base_i + k1))
+                  end if
 
                   do k2 = k1 + 1, nn_i
                     id2 = csr_id(base_i + k2)
@@ -668,13 +746,18 @@ contains
                     ind4 = lmat_g(k2, k1, ig)
                     if (ind4 == 0) cycle
                     ind2 = csr_dist(base_i + k2)
-                    p2   = int(csr_phi(base_i + k2))
+                    if (exact_g) then
+                      u2x = ug(k2, 1, ig); u2y = ug(k2, 2, ig); u2z = ug(k2, 3, ig)
+                    else
+                      p2 = int(csr_phi(base_i + k2))
+                    end if
                     w12  = weights(i) * weights(id1) * weights(id2)
                     rand12 = (i > num_data_g .and. id1 > num_data_g .and. &
                               id2 > num_data_g)
 
                     !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, raw_bin, &
-                    !$ACC&   parity_flip, sign_V, ind3, ind5, ind6, p3, w4, vol)
+                    !$ACC&   parity_flip, sign_V, ind3, ind5, ind6, p3, w4, vol, &
+                    !$ACC&   u3x, u3y, u3z, rn3)
                     do k3 = k2 + 1, nn_i
                       ind5 = lmat_g(k3, k1, ig)
                       if (ind5 == 0) cycle
@@ -689,10 +772,18 @@ contains
                       if (config_idx == 0) cycle
                       parity_flip = sign(1, raw_bin)
 
-                      p3 = int(csr_phi(base_i + k3))
-                      vol = dir_x(p1) * (dir_y(p2)*dir_z(p3) - dir_z(p2)*dir_y(p3)) &
-                          + dir_y(p1) * (dir_z(p2)*dir_x(p3) - dir_x(p2)*dir_z(p3)) &
-                          + dir_z(p1) * (dir_x(p2)*dir_y(p3) - dir_y(p2)*dir_x(p3))
+                      id3 = csr_id(base_i + k3)
+                      if (exact_g) then
+                        u3x = ug(k3, 1, ig); u3y = ug(k3, 2, ig); u3z = ug(k3, 3, ig)
+                        vol = u1x * (u2y*u3z - u2z*u3y) &
+                            + u1y * (u2z*u3x - u2x*u3z) &
+                            + u1z * (u2x*u3y - u2y*u3x)
+                      else
+                        p3 = int(csr_phi(base_i + k3))
+                        vol = dir_x(p1) * (dir_y(p2)*dir_z(p3) - dir_z(p2)*dir_y(p3)) &
+                            + dir_y(p1) * (dir_z(p2)*dir_x(p3) - dir_x(p2)*dir_z(p3)) &
+                            + dir_z(p1) * (dir_x(p2)*dir_y(p3) - dir_y(p2)*dir_x(p3))
+                      end if
                       if (abs(vol) < VOL_DEGEN_TOL) then
                         sign_V = 0   ! degenerate: no chirality, odd channel gets 0
                       else if (vol > 0.0d0) then
@@ -701,7 +792,6 @@ contains
                         sign_V = -1
                       end if
 
-                      id3 = csr_id(base_i + k3)
                       w4  = w12 * weights(id3)
 
                       !$ACC ATOMIC UPDATE
@@ -745,6 +835,7 @@ contains
     end do
 
     deallocate(lmat_g, part_n4, part_r4)
+    if (allocated(ug)) deallocate(ug)
 
     call write_4pcf_results()
   end subroutine query_graph_4pcf_parity_gpu

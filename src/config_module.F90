@@ -26,9 +26,12 @@ module config_module
     logical :: three_pcf_eq = .false.
     logical :: four_pcf = .false.
     logical :: four_pcf_parity = .false.
+    logical :: exact_parity = .false.
     logical :: half_graph = .true.
     integer :: n_configs_4pcf = 0
-    ! Direction pixel parameters for 4PCF parity (n_theta * n_phi <= 127 for int8)
+    ! Direction pixel parameters for 4PCF parity (n_theta * n_phi <= 32767:
+    ! the pixel index is stored as int16 per graph edge).  Override with
+    ! -ntheta / -nphi; ignored entirely under -exactparity.
     integer :: n_theta_dir = 4
     integer :: n_phi_dir = 16
     integer :: n_dir_pixels = 64   ! = n_theta_dir * n_phi_dir
@@ -245,6 +248,19 @@ contains
       case ('-4pcfp')
         cfg%four_pcf_parity = .true.
         i = i + 1
+      case ('-exactparity')
+        cfg%exact_parity = .true.
+        i = i + 1
+      case ('-ntheta')
+        call get_value(arg)
+        read(arg, *, iostat=ios) cfg%n_theta_dir
+        call check_numeric()
+        i = i + 2
+      case ('-nphi')
+        call get_value(arg)
+        read(arg, *, iostat=ios) cfg%n_phi_dir
+        call check_numeric()
+        i = i + 2
       case default
         print '("ERROR: unknown option ",a)', trim(opt)
         stop 1
@@ -289,10 +305,18 @@ contains
       print *, 'ERROR: -nmu must be <= 127 (mu indices stored as int8)'
       stop 1
     end if
-    if (cfg%n_theta_dir * cfg%n_phi_dir > 127) then
-      print *, 'ERROR: n_theta_dir * n_phi_dir must be <= 127 (phi pixel stored as int8)'
+    if (cfg%n_theta_dir < 1 .or. cfg%n_phi_dir < 1) then
+      print *, 'ERROR: -ntheta and -nphi must be >= 1'
       stop 1
     end if
+    ! Division form: the product would overflow default integer for large
+    ! -ntheta/-nphi and could wrap to a small positive that passes the test.
+    if (cfg%n_theta_dir > 32767 / cfg%n_phi_dir) then
+      print *, 'ERROR: -ntheta * -nphi must be <= 32767 (phi pixel stored as int16)'
+      stop 1
+    end if
+    ! Derived AFTER validation: sole sizing input for dir_x/dir_y/dir_z.
+    cfg%n_dir_pixels = cfg%n_theta_dir * cfg%n_phi_dir
 
     ! --- Periodic-box mode validation ---
     if (cfg%periodic) then
@@ -355,6 +379,7 @@ contains
       end if
     end subroutine check_numeric
 
+
   end subroutine parseOptions
 
   ! Parse the -box argument: either a single side length L (cubic box)
@@ -409,6 +434,10 @@ contains
     print *, '       -box    periodic box side length L (or Lx,Ly,Lz).'
     print *, '               Uses minimum-image separations; without -ran the'
     print *, '               RR/RRR/RRRR counts are computed analytically'
+    print *, '       -exactparity  parity sign from the exact galaxy positions'
+    print *, '               instead of pixelized spoke directions (-4pcfp only)'
+    print *, '       -ntheta N     polar direction bins   (default 4,  -4pcfp only)'
+    print *, '       -nphi   M     azimuthal direction bins (default 16, N*M <= 32767)'
     print *, ' '
     print *, 'QUERY MODES (combinable; the graph is built once per run):'
     print *, '       -2pcf   2-point correlation function'

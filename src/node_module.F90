@@ -1,12 +1,13 @@
 module node_module
-  use iso_fortran_env, only: int32, int8
+  use iso_fortran_env, only: int32, int8, int16
   implicit none
   type :: node
     integer(kind=int32) :: nn = 0
     integer(kind=int32), allocatable :: id(:)
     integer(kind=int8), allocatable :: dist(:), mu(:)
-    ! Direction pixel index (combined theta/phi bin), allocated only for 4PCF parity
-    integer(kind=int8), allocatable :: phi(:)
+    ! Direction pixel index (combined theta/phi bin), allocated only for 4PCF
+    ! parity.  int16 so grids finer than 127 pixels are possible.
+    integer(kind=int16), allocatable :: phi(:)
   contains
     procedure :: init => node_init
     procedure :: init_with_phi => node_init_with_phi

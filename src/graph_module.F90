@@ -3,7 +3,7 @@ module graph_module
   use kdtree2_precision_module
   use node_module
   use sorting_module
-  use iso_fortran_env, only: int8
+  use iso_fortran_env, only: int8, int16
   use config_module
   implicit none
 
@@ -43,7 +43,9 @@ contains
     iend_clamped = min(iend, ntotal)
     allocate(resultsb(ntotal))
     if (cfg%periodic) allocate(rescen(ntotal))
-    store_phi = cfg%four_pcf_parity
+    ! -exactparity takes the signed volume from positions, so the per-edge
+    ! direction index is not needed at all (saves 2 B/edge).
+    store_phi = cfg%four_pcf_parity .and. .not. cfg%exact_parity
 
     ! Pair Legendre-multipole sums for the anisotropic disconnected-4PCF
     ! subtraction.  Accumulated here because this is the only place the
@@ -252,7 +254,7 @@ contains
           i_phi   = min(cfg%n_phi_dir,   max(1, int(floor((phi_sph + PI) * cfg%n_phi_dir / (2.0d0*PI))) + 1))
 
           ! Combined pixel index (1 to n_dir_pixels)
-          output(i)%phi(k) = int((i_theta - 1) * cfg%n_phi_dir + i_phi, int8)
+          output(i)%phi(k) = int((i_theta - 1) * cfg%n_phi_dir + i_phi, int16)
         end if
       end do
 

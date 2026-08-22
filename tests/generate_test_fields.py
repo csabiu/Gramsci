@@ -199,3 +199,69 @@ def generate_aniso_box(n_blobs, per_blob, box_size, sigma_xy, sigma_z, seed,
     positions = (centers[:, None, :] + offsets).reshape(-1, 3) % box_size
     weights = np.ones(len(positions))
     _write_catalog(gal_file, positions, weights)
+
+
+def _random_rotations(n, rng):
+    """n uniform proper rotations (quaternion construction)."""
+    q = rng.standard_normal((n, 4))
+    q /= np.linalg.norm(q, axis=1)[:, None]
+    w, x, y, z = q.T
+    R = np.empty((n, 3, 3))
+    R[:, 0, 0] = 1 - 2 * (y * y + z * z)
+    R[:, 0, 1] = 2 * (x * y - z * w)
+    R[:, 0, 2] = 2 * (x * z + y * w)
+    R[:, 1, 0] = 2 * (x * y + z * w)
+    R[:, 1, 1] = 1 - 2 * (x * x + z * z)
+    R[:, 1, 2] = 2 * (y * z - x * w)
+    R[:, 2, 0] = 2 * (x * z - y * w)
+    R[:, 2, 1] = 2 * (y * z + x * w)
+    R[:, 2, 2] = 1 - 2 * (x * x + y * y)
+    return R
+
+
+def generate_chiral_tetra_shapes(n_struct, box_size, n_rand, seed, gal_file,
+                                 ran_file, vertices, handedness=1.0,
+                                 spacing=None, rotate=True):
+    """Chiral tetrahedra of an arbitrary shape, randomly oriented.
+
+    Parameters
+    ----------
+    vertices : (4, 3) array
+        Left-handed unit tetrahedron (positive signed volume
+        (v2-v1) x (v3-v1) . (v4-v1)); scale it before passing.
+    handedness : float
+        Fraction of left-handed structures; the rest are mirrored
+        (x -> -x, an improper reflection).
+    spacing : float
+        Grid spacing between structure centers; must exceed the
+        structure diameter plus the largest measured separation so
+        that structures cannot cross-contaminate.
+    rotate : bool
+        Apply an independent uniform proper rotation to every structure
+        (chirality-preserving), so pixelisation effects are averaged
+        over orientation.
+    """
+    rng = np.random.default_rng(seed)
+    v = np.asarray(vertices, float)
+    vol = np.dot(np.cross(v[1] - v[0], v[2] - v[0]), v[3] - v[0])
+    if vol <= 0:
+        raise ValueError("vertices must be left-handed (positive volume)")
+    left = v - v.mean(axis=0)
+    right = left * np.array([-1.0, 1.0, 1.0])   # mirror image
+
+    if spacing is None:
+        spacing = SPACING
+    centers = _make_grid_centers(n_struct, box_size, spacing, rng)
+    n_left = int(round(handedness * n_struct))
+    rots = (_random_rotations(n_struct, rng) if rotate
+            else np.tile(np.eye(3), (n_struct, 1, 1)))
+
+    gal_positions = np.empty((4 * n_struct, 3))
+    for i, c in enumerate(centers):
+        verts = left if i < n_left else right
+        gal_positions[4 * i:4 * i + 4] = c + verts @ rots[i].T
+
+    gal_weights = np.ones(4 * n_struct)
+    ran_positions, ran_weights = _make_randoms(n_rand, box_size, rng)
+    _write_catalog(gal_file, gal_positions, gal_weights)
+    _write_catalog(ran_file, ran_positions, ran_weights)

@@ -1,5 +1,5 @@
 module sorting_module
-  use iso_fortran_env, only: int8
+  use iso_fortran_env, only: int8, int16
   implicit none
 contains
 
@@ -59,10 +59,12 @@ contains
   ! Used when direction pixel is stored for 4PCF parity computation.
   subroutine sort2_with_phi(x, y, z, p, n)
     integer, intent(inout) :: x(:)
-    integer(int8), intent(inout) :: y(:), z(:), p(:)
+    integer(int8), intent(inout) :: y(:), z(:)
+    integer(int16), intent(inout) :: p(:)
     integer, intent(in) :: n
     integer :: i, j, key_x
-    integer(int8) :: key_y, key_z, key_p
+    integer(int8) :: key_y, key_z
+    integer(int16) :: key_p
 
     do i = 2, n
       key_x = x(i)

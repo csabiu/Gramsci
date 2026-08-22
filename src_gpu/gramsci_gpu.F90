@@ -86,8 +86,10 @@ program Ngramsci_gpu
     block
       integer :: bpe
       real(kdkind) :: mem_half_gb
+      ! id(int32=4B) + dist(int8=1B) + mu(int8=1B) [+ phi(int16=2B) for parity]
       bpe = 6
-      if (cfg%four_pcf_parity) bpe = 7
+      ! -exactparity stores no per-edge direction index
+      if (cfg%four_pcf_parity .and. .not. cfg%exact_parity) bpe = 8
       mem_half_gb = dble(cfg%num_data + cfg%num_rand) * avg_neighbors &
                     * dble(bpe) * 0.5d0 / 1073741824.0d0
       print '("Est. graph RAM: ",f8.2," GB")', mem_half_gb
@@ -133,6 +135,8 @@ program Ngramsci_gpu
     real(wt1 - wt0, kdkind) / real(wt_rate, kdkind)
 
   call kdtree2_destroy(kd_tree)
+  if (cfg%exact_parity .and. cfg%four_pcf_parity) &
+    call init_exact_parity_positions()
   deallocate(points)
 
   if (cfg%rank == 0) print *, 'finished building node relationships '
