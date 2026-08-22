@@ -30,10 +30,15 @@ from parity_shapes import (SHAPES, canonicalise, edge_lengths,
 N_STRUCT, N_RAND = 500, 20000
 
 
+# The coarse grid is named explicitly: it is no longer the default, and the
+# point of test 1 is to contrast it with the exact evaluation.
+COARSE = ['-ntheta', '4', '-nphi', '16']
+
+
 def run(binary, gal, ran, out, rmin, rmax, nb, exact, env=None):
     cmd = [binary, '-gal', gal, '-ran', ran, '-rmin', str(rmin),
            '-rmax', str(rmax), '-nbins', str(nb), '-nmu', '1',
-           '-out', out, '-4pcfp'] + (['-exactparity'] if exact else [])
+           '-out', out, '-4pcfp'] + (['-exactparity'] if exact else COARSE)
     e = dict(os.environ)
     if env:
         e.update(env)
@@ -87,12 +92,12 @@ def recovery(shape, scale, x, seed, exact, binary=GPU):
 def main():
     quick = '--quick' in sys.argv
 
-    print('=== 1. injection recovery: pixelized vs exact (GPU) ===')
+    print('=== 1. injection recovery: coarse 4x16 grid vs exact (GPU) ===')
     for shape in ('flattened', 'sheared', 'scalene'):
         for exact in (False, True):
             vals = [recovery(shape, 15.0, 1.0, s, exact)[0]
                     for s in (1, 2, 3)]
-            print(f'  {shape:9s} {"exact" if exact else "pixel":5s}: '
+            print(f'  {shape:9s} {"exact" if exact else "4x16":5s}: '
                   f'{np.mean(vals):+.4f} +- {np.std(vals):.4f}')
 
     print('=== 2. CPU == GPU (exact mode, flattened) ===')

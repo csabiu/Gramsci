@@ -83,8 +83,8 @@ shared GPU.
 - The discarded fraction and the odd-channel attenuation both fall steeply
   with grid resolution: measured over the estimator's own quadruplet measure,
   6.8% of tetrahedra are degenerate at the default `4 x 16` grid, 1.4% at
-  `8 x 32` and 0.12% at `23 x 91`.  `-ntheta N` / `-nphi M` set the grid
-  (`N*M <= 32767`, 2 bytes per edge); `-exactparity` computes the signed
+  `8 x 32` (the default) and 0.12% at `23 x 91`.  `-ntheta N` / `-nphi M`
+  set the grid (`N*M <= 32767`, 2 bytes per edge); `-exactparity` computes the signed
   volume from the galaxy positions instead, which discards nothing, has no
   attenuation, needs no per-edge index (24 B per point instead of 2 B per
   edge) and costs ~8% more query time.
