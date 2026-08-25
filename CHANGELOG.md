@@ -3,6 +3,24 @@
 Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
 *ApJS* **242**, 29 (2019), [arXiv:1901.00296](https://arxiv.org/abs/1901.00296).
 
+## [2.5.0] — 2026-08-25
+
+### Added
+- **Exact signed-volume parity** (`-exactparity`): the odd-channel sign is
+  computed from the exact galaxy positions rather than quantized spoke
+  directions, eliminating direction-pixel attenuation entirely (recovered
+  asymmetry consistent with unity for every tetrahedron family, including
+  near-degenerate flattened and sheared shapes) at ~1.1–1.2× query cost.
+- **Runtime direction-pixel grid** (`-ntheta`/`-nphi`) for the pixelized
+  parity mode; pixel indices are now 16-bit (products up to 32767 pixels).
+- **Delete-one jackknife resampling for the 3PCF** (CPU and GPU).
+- GitHub Actions CI.
+
+### Changed
+- The default parity direction grid is now **8 × 32** (was 4 × 16),
+  removing the recovered-asymmetry attenuation of near-degenerate
+  configurations at <10% extra query cost.
+
 ## [2.4.0] — 2026-07-12
 
 ### Added

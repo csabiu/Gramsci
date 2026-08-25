@@ -6,7 +6,7 @@ module config_module
 
   ! Single source of truth for the release version (see CHANGELOG.md);
   ! printed by -version and stamped into every output file's header.
-  character(len=*), parameter :: GRAMSCI_VERSION = '2.4.0'
+  character(len=*), parameter :: GRAMSCI_VERSION = '2.5.0'
 
   ! Configuration derived type bundling all parameters
   type :: gramsci_config

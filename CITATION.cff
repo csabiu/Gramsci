@@ -10,7 +10,8 @@ authors:
     given-names: Cristiano G.
     email: csabiu@gmail.com
     affiliation: "Department of Physics, University of Seoul"
-version: 2.0.0
+version: 2.5.0
+date-released: 2026-08-25
 repository-code: "https://github.com/csabiu/Gramsci"
 license: GPL-3.0
 preferred-citation:
