@@ -205,6 +205,46 @@ def test_chiral_parity(bindir):
     print("  Test PASSED")
 
 
+def test_empty_bins_finite(bindir):
+    """Empty bins must write 0, not Inf/NaN.
+
+    rmax far beyond the catalogue extent leaves the upper radial bins with
+    no pairs/triplets at all (DD = RR = 0), so the 2PCF/3PCF/equilateral
+    estimators previously wrote 0/0 = NaN rows.  Every estimator column
+    must be finite, and rows with zero counts must carry a zero estimate.
+    """
+    print('\n=== Test: empty bins write finite estimators ===')
+
+    rng = np.random.default_rng(SEED)
+    gal_file = 'tmp_empty.gal'
+    ran_file = 'tmp_empty.ran'
+    out = 'tmp_empty.out'
+    gramsci = os.path.join(bindir, 'gramsci')
+
+    # Everything inside a 50-box: max separation ~87, so with rmax = 300
+    # and 3 bins only bin 1 is populated; bins 2-3 are empty.
+    np.savetxt(gal_file, rng.random((300, 3)) * 50.0, fmt='%.10e')
+    np.savetxt(ran_file, rng.random((600, 3)) * 50.0, fmt='%.10e')
+
+    run(f"{gramsci} -gal {gal_file} -ran {ran_file} "
+        f"-rmin 1 -rmax 300 -nbins 3 -nmu 1 -out {out} -2pcf -3pcf -equi")
+
+    for mode, cnt_cols, est_col in (('2pcf', (4, 5), 6),
+                                    ('3pcf', (6, 7), 8),
+                                    ('equi', (4, 5), 6)):
+        data = np.loadtxt(f'{out}.{mode}', comments='#', ndmin=2)
+        assert np.all(np.isfinite(data)), \
+            f'{mode}: non-finite values in output (empty-bin division)'
+        empty = np.all(data[:, list(cnt_cols)] == 0.0, axis=1)
+        assert np.any(empty), f'{mode}: test expected some empty bins'
+        assert np.all(data[empty, est_col] == 0.0), \
+            f'{mode}: empty bins should carry a zero estimate'
+    print("  all outputs finite; empty bins are zero")
+
+    _cleanup(gal_file, ran_file, f'{out}.2pcf', f'{out}.3pcf', f'{out}.equi')
+    print("  Test PASSED")
+
+
 def test_periodic_parity(bindir):
     """Periodic-box parity must match the non-periodic path exactly.
 
@@ -639,6 +679,7 @@ def main():
     test_pairs_2pcf(bindir)
     test_regular_tetra_connected(bindir)
     test_chiral_parity(bindir)
+    test_empty_bins_finite(bindir)
     test_periodic_parity(bindir)
     test_analytic_randoms(bindir)
     test_combined_modes(bindir)

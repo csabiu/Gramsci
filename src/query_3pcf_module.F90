@@ -338,10 +338,16 @@ contains
           associate(bin => bintable(i, j, k, 1))
           if (cfg%RSD) then
             do l = 1, cfg%nmu
+              ! Empty bin (no RRR triplets): write 0, not Inf/NaN.
+              if (N3(bin, l, 3) /= 0.0d0) then
+                zeta = N2(bin, l, 3) / N3(bin, l, 3)
+              else
+                zeta = 0.0d0
+              end if
               write(unit_num, '(11(e14.7,1x))') radial_bins(i), radial_bins(i+1), &
                 radial_bins(j), radial_bins(j+1), radial_bins(k), radial_bins(k+1), &
                 ((float(l)-1.)/cfg%mu_scale/2.), (float(l)/cfg%mu_scale/2.), &
-                N2(bin, l, 3), N3(bin, l, 3), N2(bin, l, 3) / N3(bin, l, 3)
+                N2(bin, l, 3), N3(bin, l, 3), zeta
             end do
           else
             if (cfg%analytic) then
@@ -351,8 +357,10 @@ contains
               else
                 zeta = 0.0d0
               end if
-            else
+            else if (N3(bin, 1, 3) /= 0.0d0) then
               zeta = N2(bin, 1, 3) / N3(bin, 1, 3)
+            else
+              zeta = 0.0d0
             end if
             write(unit_num, '(9(e14.7,1x))') radial_bins(i), radial_bins(i+1), &
               radial_bins(j), radial_bins(j+1), radial_bins(k), radial_bins(k+1), &
@@ -471,8 +479,11 @@ contains
           else
             zeta = 0.0d0
           end if
-        else
+        else if (N3(l, k, 3) /= 0.0d0) then
           zeta = N2(l, k, 3) / N3(l, k, 3)
+        else
+          ! Empty bin (no RRR triplets): write 0, not Inf/NaN.
+          zeta = 0.0d0
         end if
         write(unit_num, '(8(e14.7,1x))') radial_bins(l), radial_bins(l+1), &
              ((float(k)-1.)/cfg%mu_scale/2.), (float(k)/cfg%mu_scale/2.), &

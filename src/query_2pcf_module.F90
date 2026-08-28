@@ -92,7 +92,11 @@ contains
 
     do l = 1, cfg%nbins
       do k = 1, cfg%nmu
-        if (cfg%analytic) then
+        ! Empty bin (no RR pairs): write 0, not Inf/NaN — same convention
+        ! as the 4PCF and jackknife writers.
+        if (N3(l, k, 3) == 0.0d0) then
+          xi = 0.0d0
+        else if (cfg%analytic) then
           xi = N2(l, k, 3) / N3(l, k, 3) - 1.0d0
         else
           xi = N2(l, k, 3) / N3(l, k, 3)

@@ -48,6 +48,13 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   New regression test: randomly rotated interior chiral tetrahedra must
   give identical NNNN/NNNN_odd in periodic and non-periodic runs, and a
   near-unity parity-odd fraction.
+- **Empty bins no longer write Inf/NaN**: the 2PCF, 3PCF (isotropic and
+  RSD) and equilateral writers divided `N/RR` without a zero guard, so a
+  bin with no random pairs/triplets (sparse catalogues, wide `rmax`,
+  narrow μ bins) produced `0/0 = NaN` rows that silently poison anything
+  averaging over the output. Empty bins now carry a zero estimate — the
+  convention the 4PCF and jackknife writers already used. Regression test
+  added (all estimator columns finite; zero-count rows are zero).
 - The OpenCL driver never called `read_jk_regions()`, so `-jkgal`/`-jkran`
   were silently ignored (and RSD 3PCF with `-njk` would crash) in the
   `gramsci_cl` build. It now reads/assigns regions like the other drivers,
