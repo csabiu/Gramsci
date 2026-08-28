@@ -36,8 +36,9 @@ fast and memory-light.
 
 At Antonio Gramsci's 1928 trial, the Fascist prosecutor demanded:
 *"For twenty years we must stop this brain from working."* The brain kept
-working — some 3,000 notebook pages' worth. This code is named in the same
-spirit: the interesting signal is the one everyone declared too expensive
+working — some 3,000 pages' worth of the
+[*Prison Notebooks*](https://en.wikipedia.org/wiki/Prison_Notebooks).
+This code is named in the same spirit: the interesting signal is the one everyone declared too expensive
 to compute.
 
 Gramsci is best remembered for the theory of *cultural hegemony* — the way a
