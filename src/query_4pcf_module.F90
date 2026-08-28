@@ -969,8 +969,7 @@ contains
       R4(:, 2) = 0.0d0
     end if
 
-    unit_num = 40
-    open(unit_num, file=trim(mode_output_file('4pcfp')), status='unknown')
+    open(newunit=unit_num, file=trim(mode_output_file('4pcfp')), status='unknown')
     call write_provenance(unit_num)
     write(unit_num, '(a)') '# r12min r12max r13min r13max r14min r14max ' // &
                            'r23min r23max r24min r24max r34min r34max ' // &
@@ -1059,8 +1058,7 @@ contains
       call analytic_rrrr(R4(:, 1))
     end if
 
-    unit_num = 40
-    open(unit_num, file=trim(mode_output_file('4pcf')), status='unknown')
+    open(newunit=unit_num, file=trim(mode_output_file('4pcf')), status='unknown')
     call write_provenance(unit_num)
     write(unit_num, '(a)') '# r12min r12max r13min r13max r14min r14max ' // &
                            'r23min r23max r24min r24max r34min r34max ' // &
@@ -1168,9 +1166,7 @@ contains
       end do
     end do
 
-    unit_num = 41
-    unit_err = 43
-    open(unit_num, file=trim(mode_output_file(trim(mode)))//'.jk', status='unknown')
+    open(newunit=unit_num, file=trim(mode_output_file(trim(mode)))//'.jk', status='unknown')
     call write_provenance(unit_num)
     write(unit_num, '(a,i0)') '# delete-one jackknife realisations, njk = ', cfg%njk
     write(unit_num, '(a)') '# zeta_disc uses each realisation''s delete-one xi0;'
@@ -1185,7 +1181,7 @@ contains
         'r23min r23max r24min r24max r34min r34max ' // &
         'ireal NNNN RRRR zeta zeta_disc zeta_conn'
     end if
-    open(unit_err, file=trim(mode_output_file(trim(mode)))//'.jkerr', status='unknown')
+    open(newunit=unit_err, file=trim(mode_output_file(trim(mode)))//'.jkerr', status='unknown')
     call write_provenance(unit_err)
     write(unit_err, '(a,i0)') '# delete-one jackknife error, njk = ', cfg%njk
     if (parity) then

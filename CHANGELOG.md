@@ -57,6 +57,11 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   a pre-existing OpenCL bug, present at baseline, fixed separately).
 
 ### Fixed
+- Output files are opened with `newunit=` instead of hard-coded unit
+  numbers (20/30/31/32/40-43), removing the risk of unit collisions if
+  writes ever overlap; and the provenance header no longer truncates the
+  recorded command line at 4000 characters (the length is queried first,
+  so arbitrarily long flag lists and paths are stamped in full).
 - **The graph-RAM estimate sampled only data points**: every point (data
   and randoms alike) is a hub, and with clustered data the data hubs see
   systematically more neighbors than the uniform randoms that dominate

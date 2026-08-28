@@ -69,8 +69,7 @@ contains
     integer :: ios, unit_num
     character(len=MAX_LINE_LEN) :: line
 
-    unit_num = 20
-    open(unit_num, file=trim(fname), status='old', iostat=ios)
+    open(newunit=unit_num, file=trim(fname), status='old', iostat=ios)
     if (ios /= 0) then
       print *, 'ERROR: cannot open ', label, ' file ', trim(fname)
       stop 1
@@ -98,9 +97,8 @@ contains
     character(len=MAX_LINE_LEN) :: line
     real(kdkind) :: v4(4)
 
-    unit_num = 20
     if (cfg%rank == 0) print *, 'opening ', trim(fname)
-    open(unit_num, file=trim(fname), status='old', iostat=ios)
+    open(newunit=unit_num, file=trim(fname), status='old', iostat=ios)
     if (ios /= 0) then
       print *, 'ERROR: cannot open ', label, ' file ', trim(fname)
       stop 1
@@ -178,9 +176,8 @@ contains
       return
     end if
     nbad = 0
-    unit_num = 41
     if (len_trim(cfg%jkgal) > 0) then
-      open(unit_num, file=trim(cfg%jkgal), status='old', iostat=ios)
+      open(newunit=unit_num, file=trim(cfg%jkgal), status='old', iostat=ios)
       if (ios /= 0) then
         print *, 'ERROR: cannot open -jkgal file ', trim(cfg%jkgal)
         stop
@@ -200,7 +197,7 @@ contains
       close(unit_num)
     end if
     if (len_trim(cfg%jkran) > 0) then
-      open(unit_num, file=trim(cfg%jkran), status='old', iostat=ios)
+      open(newunit=unit_num, file=trim(cfg%jkran), status='old', iostat=ios)
       if (ios /= 0) then
         print *, 'ERROR: cannot open -jkran file ', trim(cfg%jkran)
         stop
@@ -366,13 +363,12 @@ contains
     ! Persist the labels in the -jkgal/-jkran input format, so the exact
     ! partition can be re-used (or inspected) with external label files.
     if (cfg%rank == cfg%master) then
-      unit_num = 42
-      open(unit_num, file=trim(cfg%output_file)//'.jkgal', status='unknown')
+      open(newunit=unit_num, file=trim(cfg%output_file)//'.jkgal', status='unknown')
       do i = 1, cfg%num_data
         write(unit_num, '(i0)') region(i)
       end do
       close(unit_num)
-      open(unit_num, file=trim(cfg%output_file)//'.jkran', status='unknown')
+      open(newunit=unit_num, file=trim(cfg%output_file)//'.jkran', status='unknown')
       do i = cfg%num_data + 1, ntot
         write(unit_num, '(i0)') region(i)
       end do

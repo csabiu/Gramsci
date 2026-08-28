@@ -579,9 +579,13 @@ contains
   ! character), as does the column-name header that follows.
   subroutine write_provenance(unit_num)
     integer, intent(in) :: unit_num
-    character(len=4000) :: cmd
-    integer :: dt(8)
+    character(len=:), allocatable :: cmd
+    integer :: dt(8), clen
 
+    ! Query the true length first so long command lines (many flags, deep
+    ! paths) are recorded in full rather than truncated at a fixed size.
+    call get_command(length=clen)
+    allocate(character(len=clen) :: cmd)
     call get_command(cmd)
     call date_and_time(values=dt)
 

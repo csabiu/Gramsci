@@ -316,8 +316,7 @@ contains
       return
     end if
 
-    unit_num = 30
-    open(unit_num, file=trim(mode_output_file('3pcf')), status='unknown')
+    open(newunit=unit_num, file=trim(mode_output_file('3pcf')), status='unknown')
     call write_provenance(unit_num)
     if (cfg%RSD) then
       write(unit_num, '(a)') '# r1 min, r1 max, r2 min, r2 max, r3 min, r3 max, mu min, mu max, NNN, RRR, 3pcf (zeta)'
@@ -383,9 +382,7 @@ contains
     ! (analytic mode rejects -njk anyway; this is belt and braces).
     if (cfg%internal_3pcf) return
 
-    unit_num = 31
-    unit_err = 32
-    open(unit_num, file=trim(mode_output_file('3pcf'))//'.jk', status='unknown')
+    open(newunit=unit_num, file=trim(mode_output_file('3pcf'))//'.jk', status='unknown')
     call write_provenance(unit_num)
     write(unit_num, '(a,i0)') '# delete-one jackknife realisations, njk = ', cfg%njk
     if (cfg%RSD) then
@@ -393,7 +390,7 @@ contains
     else
       write(unit_num, '(a)') '# r1min r1max r2min r2max r3min r3max ireal NNN RRR zeta'
     end if
-    open(unit_err, file=trim(mode_output_file('3pcf'))//'.jkerr', status='unknown')
+    open(newunit=unit_err, file=trim(mode_output_file('3pcf'))//'.jkerr', status='unknown')
     call write_provenance(unit_err)
     write(unit_err, '(a,i0)') '# delete-one jackknife error, njk = ', cfg%njk
     if (cfg%RSD) then
@@ -461,8 +458,7 @@ contains
       call analytic_rrr_equilateral(N3(:, 1, 3))
     end if
 
-    unit_num = 30
-    open(unit_num, file=trim(mode_output_file('equi')), status='unknown')
+    open(newunit=unit_num, file=trim(mode_output_file('equi')), status='unknown')
     call write_provenance(unit_num)
     write(unit_num, '(a)') '# r min, r max, mu min, mu max, NNN, RRR, equilateral 3pcf (zeta)'
     do l = 1, cfg%nbins
@@ -496,13 +492,11 @@ contains
     if (cfg%rank /= cfg%master) return
     if (cfg%njk <= 0) return
 
-    unit_num = 31
-    unit_err = 32
-    open(unit_num, file=trim(mode_output_file('equi'))//'.jk', status='unknown')
+    open(newunit=unit_num, file=trim(mode_output_file('equi'))//'.jk', status='unknown')
     call write_provenance(unit_num)
     write(unit_num, '(a,i0)') '# delete-one jackknife realisations, njk = ', cfg%njk
     write(unit_num, '(a)') '# rmin rmax mumin mumax ireal NNN RRR zeta'
-    open(unit_err, file=trim(mode_output_file('equi'))//'.jkerr', status='unknown')
+    open(newunit=unit_err, file=trim(mode_output_file('equi'))//'.jkerr', status='unknown')
     call write_provenance(unit_err)
     write(unit_err, '(a,i0)') '# delete-one jackknife error, njk = ', cfg%njk
     write(unit_err, '(a)') '# rmin rmax mumin mumax zeta_mean_jk zeta_sigma_jk'

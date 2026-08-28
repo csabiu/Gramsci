@@ -82,9 +82,8 @@ contains
       end do
     end if
 
-    unit_num = 30
     print *, 'writing output to: ', trim(mode_output_file('2pcf'))
-    open(unit_num, file=trim(mode_output_file('2pcf')), status='unknown')
+    open(newunit=unit_num, file=trim(mode_output_file('2pcf')), status='unknown')
     call write_provenance(unit_num)
     write(unit_num, '(a)') '# r min, r max, mu min, mu max, NN, RR, 2pcf (xi)'
 
@@ -119,13 +118,11 @@ contains
     if (cfg%rank /= cfg%master) return
     if (cfg%njk <= 0) return
 
-    unit_num = 31
-    unit_err = 32
-    open(unit_num, file=trim(mode_output_file('2pcf'))//'.jk', status='unknown')
+    open(newunit=unit_num, file=trim(mode_output_file('2pcf'))//'.jk', status='unknown')
     call write_provenance(unit_num)
     write(unit_num, '(a,i0)') '# delete-one jackknife realisations, njk = ', cfg%njk
     write(unit_num, '(a)') '# rmin rmax mumin mumax ireal NN RR xi'
-    open(unit_err, file=trim(mode_output_file('2pcf'))//'.jkerr', status='unknown')
+    open(newunit=unit_err, file=trim(mode_output_file('2pcf'))//'.jkerr', status='unknown')
     call write_provenance(unit_err)
     write(unit_err, '(a,i0)') '# delete-one jackknife error, njk = ', cfg%njk
     write(unit_err, '(a)') '# rmin rmax mumin mumax xi_mean_jk xi_sigma_jk'
