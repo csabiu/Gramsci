@@ -9,7 +9,9 @@
 !   csr_ptr(i) .. csr_ptr(i+1)-1   — range of edge indices for node i (1-based)
 !   csr_id(e)                       — neighbor node index for edge e
 !   csr_dist(e)                     — distance-bin index (int8)
-!   csr_phi(e)                      — direction-pixel index (int8, 4PCFp only)
+!   csr_phi(e)                      — direction-pixel index (int16, 4PCFp only:
+!                                     up to ntheta*nphi = 32767 pixels, 256 on
+!                                     the default 8x32 grid — too big for int8)
 !
 ! Each jagged row is freed as it is copied so peak host RAM stays near one
 ! graph copy.  csr_ptr / csr_total_edges are 64-bit (graphs may exceed 2^31
@@ -19,14 +21,14 @@
 !   call deallocate_csr()      at cleanup
 ! ---------------------------------------------------------------------------
 module csr_cl_module
-  use iso_fortran_env, only: int8, int32, int64
+  use iso_fortran_env, only: int8, int16, int32, int64
   use config_module
   implicit none
 
   integer(int64), allocatable :: csr_ptr(:)  ! shape (N+1), 1-based offsets
   integer(int32), allocatable :: csr_id(:)   ! shape (total_edges)
   integer(int8),  allocatable :: csr_dist(:) ! shape (total_edges)
-  integer(int8),  allocatable :: csr_phi(:)  ! shape (total_edges), 4PCFp only
+  integer(int16), allocatable :: csr_phi(:)  ! shape (total_edges), 4PCFp only
   integer(int64) :: csr_total_edges = 0
 
 contains

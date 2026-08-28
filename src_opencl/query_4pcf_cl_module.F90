@@ -242,7 +242,7 @@ contains
     b_ptr  = cl_buf_in_i64(csr_ptr,  int(size(csr_ptr),int64))
     b_id   = cl_buf_in_i32(csr_id,   csr_total_edges)
     b_dist = cl_buf_in_i8 (csr_dist, csr_total_edges)
-    b_phi  = cl_buf_in_i8 (csr_phi,  csr_total_edges)
+    b_phi  = cl_buf_in_i16(csr_phi,  csr_total_edges)
     b_w    = cl_buf_in_f32(wf,       n_hubs)
     b_bt6  = cl_buf_in_i32(bintable6, int(nb,int64)**6)
     b_sgn  = cl_buf_in_i8 (signv,    int(ndir,int64)**3)

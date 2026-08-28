@@ -18,7 +18,7 @@
 ! ===========================================================================
 module cl_env_module
   use iso_c_binding
-  use iso_fortran_env, only: int8, int32, int64, real32, real64, error_unit
+  use iso_fortran_env, only: int8, int16, int32, int64, real32, real64, error_unit
   use cl_module
   use cl_kernels_module, only: kernel_src
   implicit none
@@ -42,7 +42,7 @@ module cl_env_module
   integer, parameter, public :: CL_NBUCKETS = 1021
 
   public :: cl_init, cl_shutdown, cl_check
-  public :: cl_buf_in_i8, cl_buf_in_i32, cl_buf_in_i64, cl_buf_in_f32
+  public :: cl_buf_in_i8, cl_buf_in_i16, cl_buf_in_i32, cl_buf_in_i64, cl_buf_in_f32
   public :: cl_buf_zeroed_f32, cl_buf_zeroed_i8
   public :: cl_read_f32, cl_read_i8, cl_write_f32, cl_write_i8, cl_release
   public :: cl_kernel_get, cl_release_kernel
@@ -234,6 +234,16 @@ contains
                          int(n, c_size_t), c_loc(arr(1)), err)
     call cl_check(err, 'clCreateBuffer(i8)')
   end function cl_buf_in_i8
+
+  function cl_buf_in_i16(arr, n) result(buf)
+    integer(int16), target, intent(in) :: arr(*)
+    integer(int64), intent(in) :: n
+    integer(c_intptr_t) :: buf
+    integer(c_int32_t) :: err
+    buf = clCreateBuffer(cl_context_h, ior(CL_MEM_READ_ONLY, CL_MEM_COPY_HOST_PTR), &
+                         int(2_int64 * n, c_size_t), c_loc(arr(1)), err)
+    call cl_check(err, 'clCreateBuffer(i16)')
+  end function cl_buf_in_i16
 
   function cl_buf_in_i32(arr, n) result(buf)
     integer(int32), target, intent(in) :: arr(*)

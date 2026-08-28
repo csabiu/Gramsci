@@ -278,7 +278,7 @@ __kernel void k_4pcf_all(__global const long  *ptr,
 __kernel void k_4pcf_parity(__global const long  *ptr,
                             __global const int   *id,
                             __global const char  *dist,
-                            __global const char  *phi,
+                            __global const short *phi,   /* int16: pixel index reaches ntheta*nphi=256+ */
                             __global const float *w,
                             __global const int   *bt6,
                             __global const char  *signv,  /* ndir^3 sign table */

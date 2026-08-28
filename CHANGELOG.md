@@ -72,6 +72,17 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   of the results array; the sort is now capped at `nalloc` so callers can
   safely detect overflow (`nfound > nalloc`) and retry with more storage
   (the grow-on-demand scratch above relies on this).
+- **OpenCL 4PCF parity was silently corrupted on the default direction
+  grid** -- the third instance of the same int8 pixel overflow: the OpenCL
+  CSR packed the direction-pixel index as `int8` and the kernel read it as
+  signed `char`, so on the 8×32 = 256-pixel default grid (v2.5.0) indices
+  above 127 went negative and indexed the host-built chirality sign table
+  out of bounds. `src_opencl/validate.sh` reported 4PCFp relative errors
+  of ~1e2. csr_phi is now int16, the kernel takes `short`, and a
+  `cl_buf_in_i16` upload helper was added. validate.sh now passes all
+  five modes (4PCFp at 1.4e-7 vs the double-precision CPU, matching the
+  even channel), plain and GRAMSCI_CL_FORCE_TILED=1. The OpenACC path was
+  already 16-bit; `-exactparity` was unaffected.
 - **Periodic-box parity was silently corrupted on the default direction
   grid**: the periodic graph pass stored the direction-pixel index through
   an `int8` conversion (`graph_module.F90`), but pixel indices reach
