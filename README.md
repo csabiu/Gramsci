@@ -32,6 +32,22 @@ fast and memory-light.
 
 ---
 
+## Why the name?
+
+At Antonio Gramsci's 1928 trial, the Fascist prosecutor demanded:
+*"For twenty years we must stop this brain from working."* The brain kept
+working — some 3,000 notebook pages' worth. This code is named in the same
+spirit: the interesting signal is the one everyone declared too expensive
+to compute.
+
+Gramsci is best remembered for the theory of *cultural hegemony* — the way a
+dominant order persists not by force but by being mistaken for common sense.
+Cosmology has its own: a century of the two-point correlation function.
+GRAMSCI is the counter-hegemonic program — patient organisation of the
+triplets and quadruplets.
+
+---
+
 ## Install
 
 Needs a Fortran compiler with OpenMP (`gfortran`). On macOS: `brew install gcc`.
@@ -167,6 +183,10 @@ particular `-box` alone gives simulators the redshift-space quadrupole
 directly.  The Python wrapper exposes them as `result.xi0/xi2/xi4`.
 
 ### Jackknife errors — internal angular regions
+
+> Gramsci's motto: *pessimism of the intellect, optimism of the will.*
+> Error analysis in the same spirit: pessimism of the covariance,
+> optimism of the χ².
 
 `-njk N` switches on **delete-one jackknife** error estimation for every
 query mode, up to and including the parity-odd 4PCF:
