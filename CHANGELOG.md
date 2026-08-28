@@ -34,6 +34,20 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   combined-vs-single-mode identity test.
 
 ### Fixed
+- **Periodic-box parity was silently corrupted on the default direction
+  grid**: the periodic graph pass stored the direction-pixel index through
+  an `int8` conversion (`graph_module.F90`), but pixel indices reach
+  `ntheta*nphi` = 256 on the default 8×32 grid — anything above 127
+  wrapped to a zero/negative index, so `dir_x/y/z` were read out of
+  bounds and every `-box` + `-4pcfp` chirality sign was
+  orientation-dependent garbage (a parity-odd fraction of ~0.01 instead
+  of ~1 on an all-left-handed test catalogue). The non-periodic pass was
+  already 16-bit (v2.5.0); the periodic branch was missed, and survived
+  because the historical 4×16 = 64-pixel grid fit in `int8` and no test
+  covered periodic parity. `-exactparity` was unaffected (no pixels).
+  New regression test: randomly rotated interior chiral tetrahedra must
+  give identical NNNN/NNNN_odd in periodic and non-periodic runs, and a
+  near-unity parity-odd fraction.
 - The OpenCL driver never called `read_jk_regions()`, so `-jkgal`/`-jkran`
   were silently ignored (and RSD 3PCF with `-njk` would crash) in the
   `gramsci_cl` build. It now reads/assigns regions like the other drivers,

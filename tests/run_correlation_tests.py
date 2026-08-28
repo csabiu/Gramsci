@@ -205,6 +205,78 @@ def test_chiral_parity(bindir):
     print("  Test PASSED")
 
 
+def test_periodic_parity(bindir):
+    """Periodic-box parity must match the non-periodic path exactly.
+
+    Chiral tetrahedra strictly interior to the box (every vertex > rmax
+    from every face, so minimum-image == direct distances and no periodic
+    image can contribute): the -box run must reproduce the non-periodic
+    run's NNNN and NNNN_odd column for column.  This is the regression
+    test for the periodic graph pass storing the direction-pixel index
+    through an int8 conversion (values wrap above 127) while the default
+    grid has 8*32 = 256 pixels — garbage chirality signs in every
+    periodic -4pcfp run that the equality below catches immediately.
+    """
+    print('\n=== Test: Periodic-box parity == non-periodic (pixel path) ===')
+
+    gal_raw = 'tmp_perpar_raw.gal'
+    ran_raw = 'tmp_perpar_raw.ran'
+    gal_file = 'tmp_perpar.gal'
+    out_dir = 'tmp_perpar_direct.out'
+    out_box = 'tmp_perpar_box.out'
+    gramsci = os.path.join(bindir, 'gramsci')
+
+    # Randomly ROTATED chiral structures (rotate=True), so the edge
+    # directions sweep the whole pixel sphere — a fixed orientation touches
+    # only a few pixels and can miss an index-wrap by luck.
+    from parity_shapes import SHAPES
+    from generate_test_fields import generate_chiral_tetra_shapes
+    generate_chiral_tetra_shapes(150, BOX_SIZE, 100, SEED, gal_raw, ran_raw,
+                                 vertices=SHAPES['scalene'] * 7.0,
+                                 handedness=1.0, rotate=True)
+
+    # Keep only structures (groups of 4 rows) fully inside the safe margin:
+    # any two interior points are > 2*margin - box >= 2*rmax apart through
+    # every wrap, so the periodic and direct pair sets are identical.
+    margin = 25.0
+    pts = np.loadtxt(gal_raw)[:, :3].reshape(-1, 4, 3)  # drop weight column
+    keep = np.all((pts > margin) & (pts < BOX_SIZE - margin), axis=(1, 2))
+    pts = pts[keep].reshape(-1, 3)
+    assert len(pts) >= 120, 'too few interior chiral structures for the test'
+    np.savetxt(gal_file, pts, fmt='%.10e')
+
+    base = (f"-rmin {RMIN} -rmax {RMAX} -nbins {NBINS} -nmu 1 -4pcfp")
+    run(f"{gramsci} -gal {gal_file} {base} -out {out_dir}")
+    run(f"{gramsci} -gal {gal_file} {base} -out {out_box} -box {BOX_SIZE:g}")
+
+    d_dir = np.loadtxt(out_dir, skiprows=1)
+    d_box = np.loadtxt(out_box, skiprows=1)
+    nnnn_dir, odd_dir = d_dir[:, 12], d_dir[:, 15]
+    nnnn_box, odd_box = d_box[:, 12], d_box[:, 15]
+
+    # Same tetrahedra, same weights (pure data, no randoms in either run):
+    # counts must agree to file precision.
+    scale = np.abs(nnnn_dir).max()
+    assert np.allclose(nnnn_box, nnnn_dir, rtol=2e-6, atol=1e-9 * scale), \
+        'periodic NNNN differs from non-periodic on an interior catalogue'
+    assert np.allclose(odd_box, odd_dir, rtol=2e-6, atol=1e-9 * scale), \
+        'periodic NNNN_odd differs from non-periodic (parity pixel path broken)'
+
+    # And the signal itself is real: left-handed-only tetrahedra (every
+    # quadruplet is one intra-structure tetrahedron) give a near-fully
+    # coherent parity-odd fraction — wrapped pixel indices would give
+    # orientation-dependent garbage signs and collapse it.
+    frac = abs(odd_box.sum()) / nnnn_box.sum()
+    print(f"  periodic totals: NNNN={nnnn_box.sum():.6e}, "
+          f"NNNN_odd={odd_box.sum():.6e}, |odd/even|={frac:.3f}")
+    assert frac > 0.5, \
+        f'periodic parity-odd fraction {frac:.3f} too small — signs corrupted?'
+    print("  periodic == direct parity checks passed")
+
+    _cleanup(gal_raw, ran_raw, gal_file, out_dir, out_box)
+    print("  Test PASSED")
+
+
 def test_analytic_randoms(bindir):
     """Test 4: periodic-box analytic randoms (-box without -ran).
 
@@ -567,6 +639,7 @@ def main():
     test_pairs_2pcf(bindir)
     test_regular_tetra_connected(bindir)
     test_chiral_parity(bindir)
+    test_periodic_parity(bindir)
     test_analytic_randoms(bindir)
     test_combined_modes(bindir)
     test_aniso_disconnected(bindir)

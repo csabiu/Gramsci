@@ -183,7 +183,10 @@ contains
             i_theta = min(cfg%n_theta_dir, max(1, int(floor(theta_sph * cfg%n_theta_dir / PI)) + 1))
             i_phi   = min(cfg%n_phi_dir,   max(1, int(floor((phi_sph + PI) * cfg%n_phi_dir / (2.0d0*PI))) + 1))
 
-            output(i)%phi(k) = int((i_theta - 1) * cfg%n_phi_dir + i_phi, int8)
+            ! int16, matching node%phi and the non-periodic pass: pixel
+            ! indices reach n_theta*n_phi (256 on the default 8x32 grid),
+            ! and an int8 conversion wraps anything above 127.
+            output(i)%phi(k) = int((i_theta - 1) * cfg%n_phi_dir + i_phi, int16)
           end if
         end do
         k = nnode
