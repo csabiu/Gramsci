@@ -149,17 +149,26 @@ program Ngramsci_gpu
 
   ! 2PCF: CPU (O(N*m), fast; not worth GPU overhead)
   ! Each query mode starts from freshly zeroed shared accumulators so that
-  ! combined modes (-2pcf -3pcf ...) cannot cross-contaminate.
+  ! combined modes (-2pcf -3pcf ...) cannot cross-contaminate.  N2jk/N3jk
+  ! are shared across the pair/triplet modes, so they are re-zeroed too.
   if (cfg%two_pcf) then
     N2 = 0.0d0
     N3 = 0.0d0
+    N2jk = 0.0d0
+    N3jk = 0.0d0
     call query_graph_2pcf(1, cfg%num_data + cfg%num_rand)
   end if
 
-  ! Equilateral 3PCF with RSD: CPU only (find_normal); isotropic runs on GPU below
-  if (cfg%three_pcf_eq .and. cfg%RSD) then
+  ! Equilateral 3PCF with RSD: CPU only (find_normal); isotropic runs on GPU
+  ! below.  With -njk the isotropic case also runs here: the GPU equilateral
+  ! kernel has no jackknife accumulation.
+  if (cfg%three_pcf_eq .and. (cfg%RSD .or. cfg%njk > 0)) then
+    if (cfg%njk > 0 .and. .not. cfg%RSD .and. cfg%rank == 0) &
+      print *, 'equilateral 3PCF with -njk: running on CPU'
     N2 = 0.0d0
     N3 = 0.0d0
+    N2jk = 0.0d0
+    N3jk = 0.0d0
     call query_graph_equilateral_triangle(1, cfg%num_data + cfg%num_rand)
   end if
 
@@ -168,6 +177,8 @@ program Ngramsci_gpu
     if (cfg%rank == 0) print *, 'RSD 3PCF: running on CPU'
     N2 = 0.0d0
     N3 = 0.0d0
+    N2jk = 0.0d0
+    N3jk = 0.0d0
     call query_graph_3pcf_all(1, cfg%num_data + cfg%num_rand)
   end if
 
@@ -192,6 +203,34 @@ program Ngramsci_gpu
     N3 = 0.0d0
   end if
 
+  ! 4PCF with jackknife: the OpenACC 4PCF kernels have no jackknife
+  ! accumulation, so run the CPU merge-walk here — after the internal 2PCF
+  ! (whose xi0 the write routines need) and before build_csr (which frees
+  ! the jagged output(:) these kernels walk).
+  if (cfg%four_pcf .and. cfg%njk > 0) then
+    if (cfg%rank == 0) print *, '4PCF with -njk: running on CPU'
+    allocate(N4(cfg%n_configs_4pcf, 1))
+    allocate(R4(cfg%n_configs_4pcf, 1))
+    N4 = 0.0d0 ; R4 = 0.0d0
+    call allocate_4pcf_jk(1)
+    call query_graph_4pcf(1, cfg%num_data + cfg%num_rand)
+    deallocate(N4) ; deallocate(R4)
+    call free_4pcf_jk()
+  end if
+
+  if (cfg%four_pcf_parity .and. cfg%njk > 0) then
+    if (cfg%rank == 0) print *, '4PCF parity with -njk: running on CPU'
+    call init_direction_lookup()
+    allocate(N4(cfg%n_configs_4pcf, 2))
+    allocate(R4(cfg%n_configs_4pcf, 2))
+    N4 = 0.0d0 ; R4 = 0.0d0
+    call allocate_4pcf_jk(2)
+    call query_graph_4pcf_parity(1, cfg%num_data + cfg%num_rand)
+    deallocate(N4) ; deallocate(R4)
+    call free_4pcf_jk()
+    call cleanup_direction_lookup()
+  end if
+
   ! ---- Flatten graph to CSR ----
   ! build_csr frees each jagged row as it copies (and deallocates output),
   ! keeping peak host RAM at ~one graph copy.  All subsequent kernels use CSR.
@@ -200,21 +239,23 @@ program Ngramsci_gpu
 
   ! ---- Phase 2: GPU queries using CSR ----
 
-  ! Isotropic 3PCF: GPU bsearch kernel
+  ! Isotropic 3PCF: GPU bsearch kernel (has slot-strided jackknife partials)
   if (cfg%three_pcf .and. .not. cfg%RSD) then
     N2 = 0.0d0
     N3 = 0.0d0
+    N2jk = 0.0d0
+    N3jk = 0.0d0
     call query_graph_3pcf_gpu(1, cfg%num_data + cfg%num_rand)
   end if
 
-  ! Isotropic equilateral 3PCF: GPU kernel (RSD case ran on CPU above)
-  if (cfg%three_pcf_eq .and. .not. cfg%RSD) then
+  ! Isotropic equilateral 3PCF: GPU kernel (RSD and -njk cases ran on CPU above)
+  if (cfg%three_pcf_eq .and. .not. cfg%RSD .and. cfg%njk <= 0) then
     N2 = 0.0d0
     N3 = 0.0d0
     call query_graph_equilateral_gpu(1, cfg%num_data + cfg%num_rand)
   end if
 
-  if (cfg%four_pcf) then
+  if (cfg%four_pcf .and. cfg%njk <= 0) then
     allocate(N4(cfg%n_configs_4pcf, 1))
     allocate(R4(cfg%n_configs_4pcf, 1))
     N4 = 0.0d0 ; R4 = 0.0d0
@@ -222,7 +263,7 @@ program Ngramsci_gpu
     deallocate(N4) ; deallocate(R4)
   end if
 
-  if (cfg%four_pcf_parity) then
+  if (cfg%four_pcf_parity .and. cfg%njk <= 0) then
     call init_direction_lookup()
     allocate(N4(cfg%n_configs_4pcf, 2))
     allocate(R4(cfg%n_configs_4pcf, 2))

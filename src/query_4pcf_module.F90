@@ -273,25 +273,34 @@ contains
   subroutine compute_2pcf_for_4pcf(istart, iend)
     integer, intent(in) :: istart, iend
     integer :: i, k1, nn2, id1, bin_idx
+    integer :: jr1, jr2
     integer(int8) :: ind1
+    real(kdkind) :: wpair
 
     if (.not. allocated(DD_2pcf)) allocate(DD_2pcf(cfg%nbins))
     if (.not. allocated(RR_2pcf)) allocate(RR_2pcf(cfg%nbins))
     if (.not. allocated(xi_2pcf)) allocate(xi_2pcf(cfg%nbins))
     if (.not. allocated(xi2_2pcf)) allocate(xi2_2pcf(cfg%nbins))
     if (.not. allocated(xi4_2pcf)) allocate(xi4_2pcf(cfg%nbins))
+    ! Jackknife touching sums of the pair counts; always allocated (dummy
+    ! slice when off) because the OpenMP reduction clause names them.
+    if (.not. allocated(DD_2pcf_jk)) allocate(DD_2pcf_jk(cfg%nbins, max(cfg%njk, 1)))
+    if (.not. allocated(RR_2pcf_jk)) allocate(RR_2pcf_jk(cfg%nbins, max(cfg%njk, 1)))
     DD_2pcf = 0.0d0
     RR_2pcf = 0.0d0
     xi_2pcf = 0.0d0
     xi2_2pcf = 0.0d0
     xi4_2pcf = 0.0d0
+    DD_2pcf_jk = 0.0d0
+    RR_2pcf_jk = 0.0d0
 
     if (cfg%rank == 0) print *, 'Computing internal 2PCF for disconnected subtraction'
 
     !$OMP PARALLEL DO schedule(dynamic) &
-    !$OMP& private(i, k1, nn2, id1, ind1, bin_idx) &
-    !$OMP& shared(weights, output, buffer, cfg) &
-    !$OMP& reduction(+:DD_2pcf, RR_2pcf)
+    !$OMP& private(i, k1, nn2, id1, ind1, bin_idx, jr1, jr2, wpair) &
+    !$OMP& shared(weights, output, buffer, cfg, region) &
+    !$OMP& reduction(+:DD_2pcf, RR_2pcf) &
+    !$OMP& reduction(+:DD_2pcf_jk, RR_2pcf_jk)
     do i = istart, iend
       if (buffer(i) == 1) cycle
 
@@ -301,13 +310,32 @@ contains
         ind1 = output(i)%dist(k1)
         id1 = output(i)%id(k1)
         bin_idx = int(ind1)
+        wpair = weights(i) * weights(id1)
 
         ! All pairs (DD - 2DR + RR with signed weights)
-        DD_2pcf(bin_idx) = DD_2pcf(bin_idx) + weights(i) * weights(id1)
+        DD_2pcf(bin_idx) = DD_2pcf(bin_idx) + wpair
+
+        ! Jackknife: each pair against each DISTINCT region it touches, so
+        ! the per-realisation xi0 in the jackknifed disconnected term uses
+        ! the same delete-one convention as the tuple counts.
+        if (cfg%njk > 0) then
+          jr1 = region(i)
+          jr2 = region(id1)
+          if (jr1 > 0) &
+            DD_2pcf_jk(bin_idx, jr1) = DD_2pcf_jk(bin_idx, jr1) + wpair
+          if (jr2 > 0 .and. jr2 /= jr1) &
+            DD_2pcf_jk(bin_idx, jr2) = DD_2pcf_jk(bin_idx, jr2) + wpair
+        end if
 
         ! RR pairs only (both points are randoms)
         if (i > cfg%num_data .and. id1 > cfg%num_data) then
-          RR_2pcf(bin_idx) = RR_2pcf(bin_idx) + weights(i) * weights(id1)
+          RR_2pcf(bin_idx) = RR_2pcf(bin_idx) + wpair
+          if (cfg%njk > 0) then
+            if (jr1 > 0) &
+              RR_2pcf_jk(bin_idx, jr1) = RR_2pcf_jk(bin_idx, jr1) + wpair
+            if (jr2 > 0 .and. jr2 /= jr1) &
+              RR_2pcf_jk(bin_idx, jr2) = RR_2pcf_jk(bin_idx, jr2) + wpair
+          end if
         end if
       end do
     end do
@@ -389,6 +417,11 @@ contains
     real(kdkind) :: u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn
     logical :: exact_g
 
+    if (cfg%njk > 0) then
+      print *, 'ERROR: -njk is implemented for the merge-walk 4PCF only, '// &
+               'not the binary-search variant.'
+      stop
+    end if
     exact_g = cfg%exact_parity
     if (cfg%rank == 0) print *, 'Performing 4PCF parity (binary-search)'
     if (cfg%rank == 0) print *, 'begin querying the graph'
@@ -482,6 +515,7 @@ contains
 
     call write_4pcf_results()
   end subroutine query_graph_4pcf_parity_bsearch
+  ! (no jackknife write: the bsearch variant rejects -njk above)
 
   ! Merge-walk implementation (default).
   ! k2: 2-way walk — hub[k1+1..nn2] ∩ id1's list.
@@ -493,12 +527,13 @@ contains
     integer :: nn_id1, nn_id2
     integer :: a, b, alpha, beta, gamma
     integer :: ha, hb, hc
+    integer :: jrs(4), jr, q, p
     integer(int8) :: ind1, ind2, ind3, ind4, ind5, ind6
     integer :: raw_bin, config_idx, parity_flip, sign_V
     integer :: p1, p2, p3
-    real(kdkind) :: w4, vol
+    real(kdkind) :: w4, vol, sv4
     real(kdkind) :: u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn
-    logical :: exact_g
+    logical :: exact_g, dup, isr
 
     if (.not. cfg%half_graph) then
       print *, 'ERROR: merge-walk 4PCF parity requires half_graph=.true.'
@@ -513,10 +548,11 @@ contains
     !$OMP&         a, b, alpha, beta, gamma, ha, hb, hc, &
     !$OMP&         ind1, ind2, ind3, ind4, ind5, ind6, &
     !$OMP&         raw_bin, config_idx, parity_flip, sign_V, &
-    !$OMP&         p1, p2, p3, w4, vol, &
+    !$OMP&         p1, p2, p3, w4, vol, sv4, &
+    !$OMP&         jrs, jr, q, p, dup, isr, &
     !$OMP&         u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn) &
     !$OMP& shared(weights, output, buffer, cfg, bintable6, dir_x, dir_y, dir_z, &
-    !$OMP&        px, py, pz, exact_g) &
+    !$OMP&        px, py, pz, exact_g, region, N4jk, R4jk) &
     !$OMP& reduction(+:N4, R4)
     do i = istart, iend
       if (buffer(i) == 1) cycle
@@ -605,10 +641,41 @@ contains
                 N4(config_idx, 1) = N4(config_idx, 1) + w4
                 N4(config_idx, 2) = N4(config_idx, 2) + (parity_flip * sign_V) * w4
 
-                if (i > cfg%num_data .and. id1 > cfg%num_data .and. &
-                    id2 > cfg%num_data .and. ha > cfg%num_data) then
+                isr = i > cfg%num_data .and. id1 > cfg%num_data .and. &
+                      id2 > cfg%num_data .and. ha > cfg%num_data
+                if (isr) then
                   R4(config_idx, 1) = R4(config_idx, 1) + w4
                   R4(config_idx, 2) = R4(config_idx, 2) + (parity_flip * sign_V) * w4
+                end if
+
+                ! Jackknife: accumulate this quadruplet against each DISTINCT
+                ! region it touches (dedup as in the 3PCF).  ATOMIC, not a
+                ! reduction: see allocate_4pcf_jk.
+                if (cfg%njk > 0) then
+                  jrs(1) = region(i)
+                  jrs(2) = region(id1)
+                  jrs(3) = region(id2)
+                  jrs(4) = region(ha)
+                  sv4 = (parity_flip * sign_V) * w4
+                  do q = 1, 4
+                    jr = jrs(q)
+                    if (jr <= 0) cycle
+                    dup = .false.
+                    do p = 1, q - 1
+                      if (jrs(p) == jr) dup = .true.
+                    end do
+                    if (dup) cycle
+                    !$OMP ATOMIC UPDATE
+                    N4jk(config_idx, 1, jr) = N4jk(config_idx, 1, jr) + w4
+                    !$OMP ATOMIC UPDATE
+                    N4jk(config_idx, 2, jr) = N4jk(config_idx, 2, jr) + sv4
+                    if (isr) then
+                      !$OMP ATOMIC UPDATE
+                      R4jk(config_idx, 1, jr) = R4jk(config_idx, 1, jr) + w4
+                      !$OMP ATOMIC UPDATE
+                      R4jk(config_idx, 2, jr) = R4jk(config_idx, 2, jr) + sv4
+                    end if
+                  end do
                 end if
 
                 alpha = alpha + 1
@@ -634,6 +701,7 @@ contains
     !$OMP END PARALLEL DO
 
     call write_4pcf_results()
+    call write_4pcf_jackknife(.true.)
   end subroutine query_graph_4pcf_parity
 
   ! ---------------------------------------------------------------------------
@@ -650,6 +718,11 @@ contains
     integer :: config_idx
     real(kdkind) :: w4
 
+    if (cfg%njk > 0) then
+      print *, 'ERROR: -njk is implemented for the merge-walk 4PCF only, '// &
+               'not the binary-search variant.'
+      stop
+    end if
     if (cfg%rank == 0) print *, 'Performing 4PCF (binary-search)'
     if (cfg%rank == 0) print *, 'begin querying the graph'
 
@@ -717,8 +790,10 @@ contains
     integer :: nn_id1, nn_id2
     integer :: a, b, alpha, beta, gamma
     integer :: ha, hb, hc, config_idx
+    integer :: jrs(4), jr, q, p
     integer(int8) :: ind1, ind2, ind3, ind4, ind5, ind6
     real(kdkind) :: w4
+    logical :: dup, isr
 
     if (.not. cfg%half_graph) then
       print *, 'ERROR: merge-walk 4PCF requires half_graph=.true.'
@@ -730,8 +805,9 @@ contains
     !$OMP PARALLEL DO schedule(dynamic) &
     !$OMP& private(i, k1, nn2, id1, id2, nn_id1, nn_id2, &
     !$OMP&         a, b, alpha, beta, gamma, ha, hb, hc, config_idx, &
+    !$OMP&         jrs, jr, q, p, dup, isr, &
     !$OMP&         ind1, ind2, ind3, ind4, ind5, ind6, w4) &
-    !$OMP& shared(weights, output, buffer, cfg, bintable6) &
+    !$OMP& shared(weights, output, buffer, cfg, bintable6, region, N4jk, R4jk) &
     !$OMP& reduction(+:N4, R4)
     do i = istart, iend
       if (buffer(i) == 1) cycle
@@ -775,9 +851,33 @@ contains
                 if (config_idx /= 0) then
                   w4 = weights(i) * weights(id1) * weights(id2) * weights(ha)
                   N4(config_idx, 1) = N4(config_idx, 1) + w4
-                  if (i > cfg%num_data .and. id1 > cfg%num_data .and. &
-                      id2 > cfg%num_data .and. ha > cfg%num_data) then
+                  isr = i > cfg%num_data .and. id1 > cfg%num_data .and. &
+                        id2 > cfg%num_data .and. ha > cfg%num_data
+                  if (isr) then
                     R4(config_idx, 1) = R4(config_idx, 1) + w4
+                  end if
+                  ! Jackknife: each quadruplet against each DISTINCT region
+                  ! it touches; ATOMIC, not a reduction (allocate_4pcf_jk).
+                  if (cfg%njk > 0) then
+                    jrs(1) = region(i)
+                    jrs(2) = region(id1)
+                    jrs(3) = region(id2)
+                    jrs(4) = region(ha)
+                    do q = 1, 4
+                      jr = jrs(q)
+                      if (jr <= 0) cycle
+                      dup = .false.
+                      do p = 1, q - 1
+                        if (jrs(p) == jr) dup = .true.
+                      end do
+                      if (dup) cycle
+                      !$OMP ATOMIC UPDATE
+                      N4jk(config_idx, 1, jr) = N4jk(config_idx, 1, jr) + w4
+                      if (isr) then
+                        !$OMP ATOMIC UPDATE
+                        R4jk(config_idx, 1, jr) = R4jk(config_idx, 1, jr) + w4
+                      end if
+                    end do
                   end if
                 end if
                 alpha = alpha + 1
@@ -803,6 +903,7 @@ contains
     !$OMP END PARALLEL DO
 
     call write_4pcf_results_noparity()
+    call write_4pcf_jackknife(.false.)
   end subroutine query_graph_4pcf
 
   ! ---------------------------------------------------------------------------
@@ -817,8 +918,12 @@ contains
   ! xi2/xi4 are zero unless cfg%disc_rsd accumulated pair multipoles, in
   ! which case this reduces to the isotropic product subtraction.
   ! ---------------------------------------------------------------------------
-  function zeta_disc_config(b) result(disc)
+  ! xi0 is passed explicitly so the jackknife write can evaluate the term
+  ! with each realisation's delete-one xi0 (the full-sample callers pass
+  ! xi_2pcf).  xi2/xi4 stay at their module (full-sample) values.
+  function zeta_disc_config(b, xi0) result(disc)
     integer, intent(in) :: b(6)
+    real(kdkind), intent(in) :: xi0(:)
     real(kdkind) :: disc
     real(kdkind) :: rc(6), rc2(6), ct, l2ct, l4ct
     integer :: k, ea, eb
@@ -848,7 +953,7 @@ contains
 
       ea = b(PAIR_A(k))
       eb = b(PAIR_B(k))
-      disc = disc + xi_2pcf(ea) * xi_2pcf(eb) &
+      disc = disc + xi0(ea) * xi0(eb) &
            + xi2_2pcf(ea) * xi2_2pcf(eb) * l2ct / 5.0d0 &
            + xi4_2pcf(ea) * xi4_2pcf(eb) * l4ct / 9.0d0
     end do
@@ -920,7 +1025,7 @@ contains
 
       ! Disconnected 4PCF: 3 complementary edge pairings (parity-even),
       ! including the redshift-space multipole covariance when available.
-      zeta_disc = zeta_disc_config([b1, b2, b3, b4, b5, b6])
+      zeta_disc = zeta_disc_config([b1, b2, b3, b4, b5, b6], xi_2pcf)
 
       ! Connected even channel: subtract disconnected (which is parity-even).
       ! zeta_even = N4/R4 is already the total 4PCF (no "-1"; see no-parity
@@ -1004,7 +1109,7 @@ contains
       ! {(1,2),(3,4)} = {b1,b6}, {(1,3),(2,4)} = {b2,b5}, {(1,4),(2,3)} = {b3,b4}
       ! Invariant under S4 vertex permutations; includes the redshift-space
       ! multipole covariance terms when available.
-      zeta_disc = zeta_disc_config([b1, b2, b3, b4, b5, b6])
+      zeta_disc = zeta_disc_config([b1, b2, b3, b4, b5, b6], xi_2pcf)
 
       ! Connected 4PCF: total minus disconnected.  zeta = N4/R4 with signed
       ! weights is already the total 4PCF (it vanishes for an unclustered
@@ -1024,6 +1129,151 @@ contains
 
     if (cfg%rank == 0) print *, '4PCF results written to ', trim(mode_output_file('4pcf'))
   end subroutine write_4pcf_results_noparity
+
+  ! ---------------------------------------------------------------------------
+  ! Delete-one jackknife realisations and error summary for the 4PCF
+  ! (parity = .true. adds the odd channel).  Realisation m omits every
+  ! quadruplet touching region m:  N_m = N_total - N_touching(m).  Weight
+  ! renormalisation is deliberately NOT applied (the deleted-region factor
+  ! cancels in the ratio; see the 3PCF jackknife note).
+  !
+  ! The disconnected term is rebuilt per realisation from the jackknifed
+  ! internal 2PCF xi0 (DD_2pcf_jk / RR_2pcf_jk); the RSD multipoles xi2/xi4
+  ! (accumulated at graph build) are kept at their full-sample values --
+  ! they are a subdominant part of zeta_disc.  The parity-odd channel needs
+  ! no disconnected subtraction (all lower-order terms are parity-even), so
+  ! zeta_conn_odd_m = zeta_odd_m identically.
+  !
+  ! Only the CPU merge-walk kernels fill N4jk/R4jk; the GPU drivers route
+  ! 4PCF queries to the CPU when -njk is active.
+  ! ---------------------------------------------------------------------------
+  subroutine write_4pcf_jackknife(parity)
+    logical, intent(in) :: parity
+    integer :: config_idx, m, bb, unit_num, unit_err, b(6)
+    real(kdkind) :: ddm, rrm, n4m, r4m, n4om, disc
+    real(kdkind) :: zeta_m(cfg%njk), conn_m(cfg%njk), odd_m(cfg%njk)
+    real(kdkind) :: z_mean, z_sigma, c_mean, c_sigma, o_mean, o_sigma
+    real(kdkind), allocatable :: xi0_all(:,:)
+    character(len=5) :: mode
+
+    if (cfg%rank /= cfg%master) return
+    if (cfg%njk <= 0) return
+
+    mode = '4pcf'
+    if (parity) mode = '4pcfp'
+
+    ! Per-realisation delete-one xi0 for the disconnected term.
+    allocate(xi0_all(cfg%nbins, cfg%njk))
+    do m = 1, cfg%njk
+      do bb = 1, cfg%nbins
+        ddm = DD_2pcf(bb) - DD_2pcf_jk(bb, m)
+        rrm = RR_2pcf(bb) - RR_2pcf_jk(bb, m)
+        if (rrm /= 0.0d0) then
+          xi0_all(bb, m) = ddm / rrm
+        else
+          xi0_all(bb, m) = 0.0d0
+        end if
+      end do
+    end do
+
+    unit_num = 41
+    unit_err = 43
+    open(unit_num, file=trim(mode_output_file(trim(mode)))//'.jk', status='unknown')
+    call write_provenance(unit_num)
+    write(unit_num, '(a,i0)') '# delete-one jackknife realisations, njk = ', cfg%njk
+    write(unit_num, '(a)') '# zeta_disc uses each realisation''s delete-one xi0;'
+    write(unit_num, '(a)') '#   the RSD multipoles xi2/xi4 are full-sample.'
+    if (parity) then
+      write(unit_num, '(a)') '# r12min r12max r13min r13max r14min r14max ' // &
+        'r23min r23max r24min r24max r34min r34max ' // &
+        'ireal NNNN RRRR zeta_even NNNN_odd zeta_odd ' // &
+        'zeta_disc zeta_conn_even zeta_conn_odd'
+    else
+      write(unit_num, '(a)') '# r12min r12max r13min r13max r14min r14max ' // &
+        'r23min r23max r24min r24max r34min r34max ' // &
+        'ireal NNNN RRRR zeta zeta_disc zeta_conn'
+    end if
+    open(unit_err, file=trim(mode_output_file(trim(mode)))//'.jkerr', status='unknown')
+    call write_provenance(unit_err)
+    write(unit_err, '(a,i0)') '# delete-one jackknife error, njk = ', cfg%njk
+    if (parity) then
+      write(unit_err, '(a)') '# r12min r12max r13min r13max r14min r14max ' // &
+        'r23min r23max r24min r24max r34min r34max ' // &
+        'zeta_even_mean_jk zeta_even_sigma_jk zeta_odd_mean_jk zeta_odd_sigma_jk ' // &
+        'zeta_conn_even_mean_jk zeta_conn_even_sigma_jk'
+    else
+      write(unit_err, '(a)') '# r12min r12max r13min r13max r14min r14max ' // &
+        'r23min r23max r24min r24max r34min r34max ' // &
+        'zeta_mean_jk zeta_sigma_jk zeta_conn_mean_jk zeta_conn_sigma_jk'
+    end if
+
+    do config_idx = 1, cfg%n_configs_4pcf
+      b = canon_bins_4pcf(:, config_idx)
+      do m = 1, cfg%njk
+        n4m = N4(config_idx, 1) - N4jk(config_idx, 1, m)
+        r4m = R4(config_idx, 1) - R4jk(config_idx, 1, m)
+        if (r4m /= 0.0d0) then
+          zeta_m(m) = n4m / r4m
+        else
+          zeta_m(m) = 0.0d0
+        end if
+        disc = zeta_disc_config(b, xi0_all(:, m))
+        conn_m(m) = zeta_m(m) - disc
+        if (parity) then
+          n4om = N4(config_idx, 2) - N4jk(config_idx, 2, m)
+          if (r4m /= 0.0d0) then
+            odd_m(m) = n4om / r4m
+          else
+            odd_m(m) = 0.0d0
+          end if
+          write(unit_num, '(12(e14.7,1x),i6,1x,8(e14.7,1x))') &
+            radial_bins(b(1)), radial_bins(b(1)+1), &
+            radial_bins(b(2)), radial_bins(b(2)+1), &
+            radial_bins(b(3)), radial_bins(b(3)+1), &
+            radial_bins(b(4)), radial_bins(b(4)+1), &
+            radial_bins(b(5)), radial_bins(b(5)+1), &
+            radial_bins(b(6)), radial_bins(b(6)+1), &
+            m, n4m, r4m, zeta_m(m), n4om, odd_m(m), disc, conn_m(m), odd_m(m)
+        else
+          write(unit_num, '(12(e14.7,1x),i6,1x,5(e14.7,1x))') &
+            radial_bins(b(1)), radial_bins(b(1)+1), &
+            radial_bins(b(2)), radial_bins(b(2)+1), &
+            radial_bins(b(3)), radial_bins(b(3)+1), &
+            radial_bins(b(4)), radial_bins(b(4)+1), &
+            radial_bins(b(5)), radial_bins(b(5)+1), &
+            radial_bins(b(6)), radial_bins(b(6)+1), &
+            m, n4m, r4m, zeta_m(m), disc, conn_m(m)
+        end if
+      end do
+      call jk_mean_sigma(zeta_m, z_mean, z_sigma)
+      call jk_mean_sigma(conn_m, c_mean, c_sigma)
+      if (parity) then
+        call jk_mean_sigma(odd_m, o_mean, o_sigma)
+        write(unit_err, '(12(e14.7,1x),6(e14.7,1x))') &
+          radial_bins(b(1)), radial_bins(b(1)+1), &
+          radial_bins(b(2)), radial_bins(b(2)+1), &
+          radial_bins(b(3)), radial_bins(b(3)+1), &
+          radial_bins(b(4)), radial_bins(b(4)+1), &
+          radial_bins(b(5)), radial_bins(b(5)+1), &
+          radial_bins(b(6)), radial_bins(b(6)+1), &
+          z_mean, z_sigma, o_mean, o_sigma, c_mean, c_sigma
+      else
+        write(unit_err, '(12(e14.7,1x),4(e14.7,1x))') &
+          radial_bins(b(1)), radial_bins(b(1)+1), &
+          radial_bins(b(2)), radial_bins(b(2)+1), &
+          radial_bins(b(3)), radial_bins(b(3)+1), &
+          radial_bins(b(4)), radial_bins(b(4)+1), &
+          radial_bins(b(5)), radial_bins(b(5)+1), &
+          radial_bins(b(6)), radial_bins(b(6)+1), &
+          z_mean, z_sigma, c_mean, c_sigma
+      end if
+    end do
+    close(unit_num)
+    close(unit_err)
+    deallocate(xi0_all)
+    print '(" wrote ",i0," jackknife realisation rows to ",a)', &
+      cfg%n_configs_4pcf * cfg%njk, trim(mode_output_file(trim(mode)))//'.jk'
+  end subroutine write_4pcf_jackknife
 
   ! ---------------------------------------------------------------------------
   ! Cleanup direction lookup arrays

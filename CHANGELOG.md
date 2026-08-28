@@ -3,6 +3,48 @@
 Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
 *ApJS* **242**, 29 (2019), [arXiv:1901.00296](https://arxiv.org/abs/1901.00296).
 
+## [Unreleased]
+
+### Added
+- **Delete-one jackknife errors for every statistic** — `-2pcf`, `-3pcf`,
+  `-equi`, `-4pcf` and the parity-odd `-4pcfp` (previously 3PCF-only).
+  `-njk N` alone now partitions the sky **internally** into N equal-count
+  angular regions (sin(dec) bands × φ slices at quantiles of the random
+  catalogue, applied identically to both catalogues); the partition is
+  deliberately angular-only so radial and angular systematics are never
+  mixed in the error estimate. The labels used are written to
+  `<out>.jkgal`/`<out>.jkran` in the exact format `-jkgal`/`-jkran` read
+  back. All N realisations still come from the single normal query pass
+  (`N_m = N_total − N_touching(m)`, per-tuple distinct-region dedup); each
+  mode writes `<out>[.<mode>].jk` (realisations) and a new
+  `<out>[.<mode>].jkerr` (jackknife mean and σ per bin). The 4PCF
+  disconnected term is rebuilt per realisation from the jackknifed internal
+  2PCF ξ₀ (ξ₂/ξ₄ stay full-sample); the odd channel has no disconnected
+  term, so `zeta_conn_odd = zeta_odd` per realisation. The 4PCF jackknife
+  accumulators use `!$OMP ATOMIC` on shared arrays instead of an OpenMP
+  reduction (a per-thread copy of an (n_configs, nch, njk) array would
+  multiply memory by the thread count), with a 64 GB guard. Python API:
+  `njk=` on `compute_2pcf/3pcf/4pcf`, exposing `*_jk_mean`, `*_jk_sigma`
+  and the raw realisation table `.jk_real`. Requirements: `-ran` and
+  `N ≥ 2`; incompatible with analytic randoms; internal partition refused
+  in `-box` mode (no observer direction — external labels still accepted).
+  Verified by new brute-force regression tests that recompute every mode's
+  delete-one realisations independently in Python (including the signed
+  `bintable6` fill and `-exactparity` chirality signs) and by a
+  combined-vs-single-mode identity test.
+
+### Fixed
+- The OpenCL driver never called `read_jk_regions()`, so `-jkgal`/`-jkran`
+  were silently ignored (and RSD 3PCF with `-njk` would crash) in the
+  `gramsci_cl` build. It now reads/assigns regions like the other drivers,
+  and all `-njk` queries route to the CPU kernels (the OpenCL kernels have
+  no jackknife accumulation). The OpenACC build keeps its GPU jackknife
+  for the isotropic 3PCF and routes equilateral/4PCF jackknife to the CPU.
+- Combined query modes now also re-zero the jackknife accumulators
+  (`N2jk`/`N3jk`) between modes; previously a combined `-3pcf` run after
+  another jackknife mode could inherit stale touching sums (latent — only
+  the 3PCF used them before this release).
+
 ## [2.5.0] — 2026-08-25
 
 ### Added

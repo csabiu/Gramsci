@@ -111,6 +111,8 @@ bin/gramsci -gal galaxies.dat -ran randoms.dat \
 | `-4pcf` / `-4pcfp`  | 4PCF / 4PCF with parity decomposition                    |
 | `-ntheta <N>` / `-nphi <M>` | direction-pixel grid for `-4pcfp` (default 8×32, `N*M ≤ 32767`) |
 | `-exactparity`      | parity sign from exact positions instead of pixelized directions |
+| `-njk <N>`          | delete-one jackknife errors with N regions (all modes; see below) |
+| `-jkgal` / `-jkran` | optional external region-label files (one label 1..N per catalogue row) |
 
 Query modes can be **combined** in one run — the KD-tree and neighbor graph
 (usually the dominant cost) are built once and every query reuses them. With a
@@ -153,6 +155,53 @@ pairing, `ξ₀ξ₀ + ξ₂ξ₂L₂(cosθ)/5 + ξ₄ξ₄L₄(cosθ)/9`, with 
 angle fixed by the bin geometry. For real-space data ξ₂ ≈ ξ₄ ≈ 0 and this
 reduces to the usual isotropic product. The parity-odd channel involves no
 disconnected term and is unaffected.
+
+### Jackknife errors — internal angular regions
+
+`-njk N` switches on **delete-one jackknife** error estimation for every
+query mode, up to and including the parity-odd 4PCF:
+
+```sh
+bin/gramsci -gal data.gal -ran data.ran -rmin 20 -rmax 140 -nbins 10 \
+            -2pcf -3pcf -4pcfp -njk 50 -out result
+```
+
+By default the regions are constructed **internally, on the sky only**: the
+directions of the points as seen from the observer at the origin are cut into
+`~√N` bands of sin(dec) at equal-count quantiles, and each band into φ slices
+at equal-count quantiles, giving N regions of near-equal random counts.
+Boundaries are computed from the random catalogue (it traces the angular
+selection with the lowest shot noise) and applied identically to data and
+randoms. The partition is deliberately **angular-only** — a deleted region
+removes a full line-of-sight cone — because angular and radial variations
+have different systematic sources in real data (masking, seeing, stellar
+contamination vs redshift errors and radial selection), and a partition that
+mixed them would conflate the two in the error estimate. The labels used are
+written to `<out>.jkgal` / `<out>.jkran`, in exactly the format that
+`-jkgal <file>` / `-jkran <file>` read back, so a partition can be re-used,
+inspected, or replaced with your own (e.g. survey-specific) regions.
+
+All N realisations are accumulated in the **single normal query pass**: a
+tuple contributes to realisation m unless one of its points lies in region m,
+so `N_m = N_total − N_touching(m)` with no extra passes over the graph. Each
+mode writes two extra files:
+
+- `<out>[.<mode>].jk` — the N delete-one realisations per bin
+  (`NN/RR/xi`, `NNN/RRR/zeta`, `NNNN/RRRR/zeta[_even/_odd]/zeta_disc/zeta_conn`);
+- `<out>[.<mode>].jkerr` — the jackknife mean and error per bin,
+  `σ² = (N−1)/N Σₘ (ζₘ − ζ̄)²`.
+
+For the 4PCF the disconnected term is rebuilt per realisation from the
+jackknifed internal 2PCF ξ₀ (the RSD multipoles ξ₂/ξ₄ stay at their
+full-sample values); the parity-odd channel needs no disconnected
+subtraction, so `zeta_conn_odd = zeta_odd` realisation by realisation.
+Requirements: a random catalogue (`-ran`) and `N ≥ 2`; the internal angular
+partition is refused in `-box` mode (a periodic box has no observer
+direction — supply `-jkgal`/`-jkran` if you really want box jackknife).
+The Python wrapper exposes the same thing via `njk=`:
+`compute_2pcf(..., njk=50).xi_jk_sigma`,
+`compute_4pcf(..., parity=True, njk=50).zeta_odd_jk_sigma`, with the raw
+realisation table in `.jk_real` for building covariance matrices.
 
 ## Output
 

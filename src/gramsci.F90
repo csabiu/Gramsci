@@ -157,10 +157,14 @@ program Ngramsci
   end block
 
   ! Each query mode starts from freshly zeroed shared accumulators so that
-  ! combined modes (-2pcf -3pcf ...) cannot cross-contaminate.
+  ! combined modes (-2pcf -3pcf ...) cannot cross-contaminate.  The
+  ! jackknife touching sums share N2jk/N3jk across the pair/triplet modes,
+  ! so they are re-zeroed with them.
   if (cfg%two_pcf) then
     N2 = 0.0d0
     N3 = 0.0d0
+    N2jk = 0.0d0
+    N3jk = 0.0d0
     call query_graph_2pcf(1, cfg%num_data + cfg%num_rand)
   end if
 
@@ -175,6 +179,8 @@ program Ngramsci
   if (cfg%three_pcf) then
     N2 = 0.0d0
     N3 = 0.0d0
+    N2jk = 0.0d0
+    N3jk = 0.0d0
     if (use_bsearch) then
       call query_graph_3pcf_all_bsearch(1, cfg%num_data + cfg%num_rand)
     else
@@ -184,6 +190,8 @@ program Ngramsci
   if (cfg%three_pcf_eq) then
     N2 = 0.0d0
     N3 = 0.0d0
+    N2jk = 0.0d0
+    N3jk = 0.0d0
     call query_graph_equilateral_triangle(1, cfg%num_data + cfg%num_rand)
   end if
 
@@ -204,12 +212,14 @@ program Ngramsci
     allocate(N4(cfg%n_configs_4pcf, 1))
     allocate(R4(cfg%n_configs_4pcf, 1))
     N4 = 0.0d0 ; R4 = 0.0d0
+    call allocate_4pcf_jk(1)
     if (use_bsearch) then
       call query_graph_4pcf_bsearch(1, cfg%num_data + cfg%num_rand)
     else
       call query_graph_4pcf(1, cfg%num_data + cfg%num_rand)
     end if
     deallocate(N4) ; deallocate(R4)
+    call free_4pcf_jk()
   end if
 
   if (cfg%four_pcf_parity) then
@@ -217,12 +227,14 @@ program Ngramsci
     allocate(N4(cfg%n_configs_4pcf, 2))
     allocate(R4(cfg%n_configs_4pcf, 2))
     N4 = 0.0d0 ; R4 = 0.0d0
+    call allocate_4pcf_jk(2)
     if (use_bsearch) then
       call query_graph_4pcf_parity_bsearch(1, cfg%num_data + cfg%num_rand)
     else
       call query_graph_4pcf_parity(1, cfg%num_data + cfg%num_rand)
     end if
     deallocate(N4) ; deallocate(R4)
+    call free_4pcf_jk()
     call cleanup_direction_lookup()
   end if
 

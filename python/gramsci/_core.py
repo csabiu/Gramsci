@@ -66,6 +66,18 @@ def _load(path, stdout=''):
     return np.loadtxt(path, comments=('#', 'r'), ndmin=2)
 
 
+def _load_jk(out, stdout, njk):
+    """Load <out>.jk / <out>.jkerr written by -njk.
+
+    Returns (real, err): the realisation table with its rows reshaped to
+    (n_rows_of_main_output, njk, n_cols) and the .jkerr summary array.
+    """
+    err = _load(out + '.jkerr', stdout)
+    real = _load(out + '.jk', stdout)
+    real = real.reshape(err.shape[0], njk, real.shape[1])
+    return real, err
+
+
 def _box_arg(box):
     """Format the -box argument: scalar L or (Lx, Ly, Lz)."""
     box = np.atleast_1d(np.asarray(box, dtype=np.float64))
@@ -206,7 +218,8 @@ class FourPCFResult:
 # ---------------------------------------------------------------------------
 
 def compute_2pcf(positions, weights, randoms_pos=None, randoms_weights=None,
-                 rmin=1.0, rmax=30.0, nbins=10, nmu=1, box=None, binary=None):
+                 rmin=1.0, rmax=30.0, nbins=10, nmu=1, box=None, binary=None,
+                 njk=0):
     """Compute the 2-point correlation function.
 
     Parameters
@@ -222,6 +235,12 @@ def compute_2pcf(positions, weights, randoms_pos=None, randoms_weights=None,
                  analytically and no random catalog is needed.  Requires
                  rmax < L/2 and nmu = 1.
     binary     : str or Path  — path to gramsci binary (auto-detected if None)
+    njk        : int — number of delete-one jackknife regions (0 = off).
+                 Regions are equal-count ANGULAR patches of the sky as seen
+                 from the origin, so radial and angular systematics are never
+                 mixed.  Requires randoms; incompatible with box.  Adds
+                 .xi_jk_mean, .xi_jk_sigma and the raw realisations .jk_real
+                 (shape (nbins*nmu, njk, ncols)) to the result.
 
     Returns
     -------
@@ -238,6 +257,8 @@ def compute_2pcf(positions, weights, randoms_pos=None, randoms_weights=None,
                 '-rmin', str(rmin), '-rmax', str(rmax),
                 '-nbins', str(nbins), '-nmu', str(nmu),
                 '-out', out, '-2pcf']
+        if njk:
+            args += ['-njk', str(njk)]
         if randoms_pos is not None:
             ran = os.path.join(tmp, 'rand.ran')
             _write_catalog(ran, randoms_pos, randoms_weights)
@@ -245,11 +266,19 @@ def compute_2pcf(positions, weights, randoms_pos=None, randoms_weights=None,
         if box is not None:
             args += ['-box', _box_arg(box)]
         stdout = _run(args, tmp)
-        return TwoPCFResult(_load(out, stdout))
+        result = TwoPCFResult(_load(out, stdout))
+        if njk:
+            real, err = _load_jk(out, stdout, njk)
+            result.njk = njk
+            result.jk_real = real
+            result.xi_jk_mean = err[:, -2]
+            result.xi_jk_sigma = err[:, -1]
+        return result
 
 
 def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
-                 rmin=1.0, rmax=30.0, nbins=6, nmu=1, box=None, binary=None):
+                 rmin=1.0, rmax=30.0, nbins=6, nmu=1, box=None, binary=None,
+                 njk=0):
     """Compute the 3-point correlation function (all triangle configurations).
 
     Parameters
@@ -265,6 +294,9 @@ def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
                  analytically and no random catalog is needed.  Requires
                  rmax <= L/4 and nmu = 1.
     binary     : str or Path
+    njk        : int — number of delete-one angular jackknife regions
+                 (0 = off; requires randoms, incompatible with box).  Adds
+                 .zeta_jk_mean, .zeta_jk_sigma and .jk_real to the result.
 
     Returns
     -------
@@ -281,6 +313,8 @@ def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
                 '-rmin', str(rmin), '-rmax', str(rmax),
                 '-nbins', str(nbins), '-nmu', str(nmu),
                 '-out', out, '-3pcf']
+        if njk:
+            args += ['-njk', str(njk)]
         if randoms_pos is not None:
             ran = os.path.join(tmp, 'rand.ran')
             _write_catalog(ran, randoms_pos, randoms_weights)
@@ -288,12 +322,20 @@ def compute_3pcf(positions, weights, randoms_pos=None, randoms_weights=None,
         if box is not None:
             args += ['-box', _box_arg(box)]
         stdout = _run(args, tmp)
-        return ThreePCFResult(_load(out, stdout))
+        result = ThreePCFResult(_load(out, stdout))
+        if njk:
+            real, err = _load_jk(out, stdout, njk)
+            result.njk = njk
+            result.jk_real = real
+            result.zeta_jk_mean = err[:, -2]
+            result.zeta_jk_sigma = err[:, -1]
+        return result
 
 
 def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
                  rmin=1.0, rmax=30.0, nbins=3, parity=False, box=None,
-                 binary=None, ntheta=None, nphi=None, exact_parity=False):
+                 binary=None, ntheta=None, nphi=None, exact_parity=False,
+                 njk=0):
     """Compute the 4-point correlation function.
 
     Parameters
@@ -315,6 +357,11 @@ def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
     exact_parity : bool — compute the parity sign from the exact galaxy
         positions instead of pixelized directions.  No attenuation and no
         discarded tetrahedra; ignores ntheta/nphi.
+    njk : int — number of delete-one angular jackknife regions (0 = off;
+        requires randoms, incompatible with box).  Adds .zeta_jk_mean,
+        .zeta_jk_sigma, .zeta_conn_jk_mean, .zeta_conn_jk_sigma (and with
+        parity=True .zeta_odd_jk_mean, .zeta_odd_jk_sigma) plus the raw
+        realisations .jk_real to the result.
 
     Returns
     -------
@@ -335,6 +382,8 @@ def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
                 '-rmin', str(rmin), '-rmax', str(rmax),
                 '-nbins', str(nbins),
                 '-out', out, flag]
+        if njk:
+            args += ['-njk', str(njk)]
         if parity:
             if exact_parity:
                 args.append('-exactparity')
@@ -349,4 +398,21 @@ def compute_4pcf(positions, weights, randoms_pos=None, randoms_weights=None,
         if box is not None:
             args += ['-box', _box_arg(box)]
         stdout = _run(args, tmp)
-        return FourPCFResult(_load(out, stdout), parity=parity)
+        result = FourPCFResult(_load(out, stdout), parity=parity)
+        if njk:
+            real, err = _load_jk(out, stdout, njk)
+            result.njk = njk
+            result.jk_real = real
+            if parity:
+                result.zeta_jk_mean       = err[:, 12]
+                result.zeta_jk_sigma      = err[:, 13]
+                result.zeta_odd_jk_mean   = err[:, 14]
+                result.zeta_odd_jk_sigma  = err[:, 15]
+                result.zeta_conn_jk_mean  = err[:, 16]
+                result.zeta_conn_jk_sigma = err[:, 17]
+            else:
+                result.zeta_jk_mean       = err[:, 12]
+                result.zeta_jk_sigma      = err[:, 13]
+                result.zeta_conn_jk_mean  = err[:, 14]
+                result.zeta_conn_jk_sigma = err[:, 15]
+        return result

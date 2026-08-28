@@ -194,14 +194,18 @@ contains
   subroutine query_graph_equilateral_triangle(istart, iend)
     integer, intent(in) :: istart, iend
     integer :: i, k1, k2, nn2, id1, id2
+    integer :: jr1, jr2, jr3
     integer(int8) :: ind1, ind2, ind3
+    real(kdkind) :: wprod
 
     if (cfg%rank == 0) print *, 'begin querying the graph'
 
     !$OMP PARALLEL DO schedule(dynamic) &
     !$OMP& private(i, k1, k2, nn2, id1, id2, ind1, ind2, ind3) &
-    !$OMP& shared(weights, output, buffer, cfg) &
-    !$OMP& reduction(+:N2, N3)
+    !$OMP& private(jr1, jr2, jr3, wprod) &
+    !$OMP& shared(weights, output, buffer, cfg, region) &
+    !$OMP& reduction(+:N2, N3) &
+    !$OMP& reduction(+:N2jk, N3jk)
     do i = istart, iend
       if (buffer(i) == 1) cycle
 
@@ -220,17 +224,58 @@ contains
           call find_dist(id1, id2, ind3)
           if (ind3 /= ind1) cycle
 
+          wprod = weights(i) * weights(id1) * weights(id2)
+          ! Jackknife: accumulate against each DISTINCT region touched
+          ! (see the all-configurations 3PCF for the dedup rationale).
+          if (cfg%njk > 0) then
+            jr1 = region(i)
+            jr2 = region(id1)
+            jr3 = region(id2)
+          end if
+
           if (cfg%RSD) then
             call find_normal(output(i)%mu(k1), output(i)%mu(k2), ind2)
             if (i > cfg%num_data .and. id1 > cfg%num_data .and. id2 > cfg%num_data) then
-              N3(ind1, ind2, 3) = N3(ind1, ind2, 3) - weights(i) * weights(id1) * weights(id2)
+              N3(ind1, ind2, 3) = N3(ind1, ind2, 3) - wprod
+              if (cfg%njk > 0) then
+                if (jr1 > 0) &
+                  N3jk(ind1, ind2, 3, jr1) = N3jk(ind1, ind2, 3, jr1) - wprod
+                if (jr2 > 0 .and. jr2 /= jr1) &
+                  N3jk(ind1, ind2, 3, jr2) = N3jk(ind1, ind2, 3, jr2) - wprod
+                if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) &
+                  N3jk(ind1, ind2, 3, jr3) = N3jk(ind1, ind2, 3, jr3) - wprod
+              end if
             end if
-            N2(ind1, ind2, 3) = N2(ind1, ind2, 3) + weights(i) * weights(id1) * weights(id2)
+            N2(ind1, ind2, 3) = N2(ind1, ind2, 3) + wprod
+            if (cfg%njk > 0) then
+              if (jr1 > 0) &
+                N2jk(ind1, ind2, 3, jr1) = N2jk(ind1, ind2, 3, jr1) + wprod
+              if (jr2 > 0 .and. jr2 /= jr1) &
+                N2jk(ind1, ind2, 3, jr2) = N2jk(ind1, ind2, 3, jr2) + wprod
+              if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) &
+                N2jk(ind1, ind2, 3, jr3) = N2jk(ind1, ind2, 3, jr3) + wprod
+            end if
           else
             if (i > cfg%num_data .and. id1 > cfg%num_data .and. id2 > cfg%num_data) then
-              N3(ind1, 1, 3) = N3(ind1, 1, 3) - weights(i) * weights(id1) * weights(id2)
+              N3(ind1, 1, 3) = N3(ind1, 1, 3) - wprod
+              if (cfg%njk > 0) then
+                if (jr1 > 0) &
+                  N3jk(ind1, 1, 3, jr1) = N3jk(ind1, 1, 3, jr1) - wprod
+                if (jr2 > 0 .and. jr2 /= jr1) &
+                  N3jk(ind1, 1, 3, jr2) = N3jk(ind1, 1, 3, jr2) - wprod
+                if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) &
+                  N3jk(ind1, 1, 3, jr3) = N3jk(ind1, 1, 3, jr3) - wprod
+              end if
             end if
-            N2(ind1, 1, 3) = N2(ind1, 1, 3) + weights(i) * weights(id1) * weights(id2)
+            N2(ind1, 1, 3) = N2(ind1, 1, 3) + wprod
+            if (cfg%njk > 0) then
+              if (jr1 > 0) &
+                N2jk(ind1, 1, 3, jr1) = N2jk(ind1, 1, 3, jr1) + wprod
+              if (jr2 > 0 .and. jr2 /= jr1) &
+                N2jk(ind1, 1, 3, jr2) = N2jk(ind1, 1, 3, jr2) + wprod
+              if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) &
+                N2jk(ind1, 1, 3, jr3) = N2jk(ind1, 1, 3, jr3) + wprod
+            end if
           end if
         end do
       end do
@@ -238,6 +283,7 @@ contains
     !$OMP END PARALLEL DO
 
     call write_equilateral_results()
+    call write_equilateral_jackknife()
   end subroutine query_graph_equilateral_triangle
 
   subroutine write_3pcf_results()
@@ -326,19 +372,32 @@ contains
   ! that the randoms trace the selection, and that factor cancels in the ratio
   ! zeta = N2/N3.
   subroutine write_3pcf_jackknife()
-    integer :: i, j, k, l, m, unit_num
-    real(kdkind) :: n2m, n3m
+    integer :: i, j, k, l, m, unit_num, unit_err
+    real(kdkind) :: n2m, n3m, zeta_m(cfg%njk), z_mean, z_sigma
 
     if (cfg%rank /= cfg%master) return
     if (cfg%njk <= 0) return
+    ! The analytic 4PCF's internal 3PCF pass must never emit jackknife files
+    ! (analytic mode rejects -njk anyway; this is belt and braces).
+    if (cfg%internal_3pcf) return
 
     unit_num = 31
-    open(unit_num, file=trim(cfg%output_file)//'.jk', status='unknown')
-    write(unit_num, *) '# delete-one jackknife realisations, njk = ', cfg%njk
+    unit_err = 32
+    open(unit_num, file=trim(mode_output_file('3pcf'))//'.jk', status='unknown')
+    call write_provenance(unit_num)
+    write(unit_num, '(a,i0)') '# delete-one jackknife realisations, njk = ', cfg%njk
     if (cfg%RSD) then
-      write(unit_num, *) '# r1min r1max r2min r2max r3min r3max mumin mumax ireal NNN RRR zeta'
+      write(unit_num, '(a)') '# r1min r1max r2min r2max r3min r3max mumin mumax ireal NNN RRR zeta'
     else
-      write(unit_num, *) '# r1min r1max r2min r2max r3min r3max ireal NNN RRR zeta'
+      write(unit_num, '(a)') '# r1min r1max r2min r2max r3min r3max ireal NNN RRR zeta'
+    end if
+    open(unit_err, file=trim(mode_output_file('3pcf'))//'.jkerr', status='unknown')
+    call write_provenance(unit_err)
+    write(unit_err, '(a,i0)') '# delete-one jackknife error, njk = ', cfg%njk
+    if (cfg%RSD) then
+      write(unit_err, '(a)') '# r1min r1max r2min r2max r3min r3max mumin mumax zeta_mean_jk zeta_sigma_jk'
+    else
+      write(unit_err, '(a)') '# r1min r1max r2min r2max r3min r3max zeta_mean_jk zeta_sigma_jk'
     end if
 
     do i = 1, cfg%nbins
@@ -349,25 +408,43 @@ contains
             do m = 1, cfg%njk
               n2m = N2(bin, l, 3) - N2jk(bin, l, 3, m)
               n3m = N3(bin, l, 3) - N3jk(bin, l, 3, m)
+              if (n3m /= 0.0d0) then
+                zeta_m(m) = n2m / n3m
+              else
+                zeta_m(m) = 0.0d0
+              end if
               if (cfg%RSD) then
                 write(unit_num, '(8(e14.7,1x),i6,1x,3(e14.7,1x))') &
                   radial_bins(i), radial_bins(i+1), radial_bins(j), radial_bins(j+1), &
                   radial_bins(k), radial_bins(k+1), &
                   ((float(l)-1.)/cfg%mu_scale/2.), (float(l)/cfg%mu_scale/2.), &
-                  m, n2m, n3m, n2m / n3m
+                  m, n2m, n3m, zeta_m(m)
               else
                 write(unit_num, '(6(e14.7,1x),i6,1x,3(e14.7,1x))') &
                   radial_bins(i), radial_bins(i+1), radial_bins(j), radial_bins(j+1), &
-                  radial_bins(k), radial_bins(k+1), m, n2m, n3m, n2m / n3m
+                  radial_bins(k), radial_bins(k+1), m, n2m, n3m, zeta_m(m)
               end if
             end do
+            call jk_mean_sigma(zeta_m, z_mean, z_sigma)
+            if (cfg%RSD) then
+              write(unit_err, '(10(e14.7,1x))') &
+                radial_bins(i), radial_bins(i+1), radial_bins(j), radial_bins(j+1), &
+                radial_bins(k), radial_bins(k+1), &
+                ((float(l)-1.)/cfg%mu_scale/2.), (float(l)/cfg%mu_scale/2.), &
+                z_mean, z_sigma
+            else
+              write(unit_err, '(8(e14.7,1x))') &
+                radial_bins(i), radial_bins(i+1), radial_bins(j), radial_bins(j+1), &
+                radial_bins(k), radial_bins(k+1), z_mean, z_sigma
+            end if
           end do
           end associate
         end do
       end do
     end do
     close(unit_num)
-    print *, 'wrote jackknife realisations to ', trim(cfg%output_file)//'.jk'
+    close(unit_err)
+    print *, 'wrote jackknife realisations to ', trim(mode_output_file('3pcf'))//'.jk'
   end subroutine write_3pcf_jackknife
 
   subroutine write_equilateral_results()
@@ -404,5 +481,51 @@ contains
     end do
     close(unit_num)
   end subroutine write_equilateral_results
+
+  ! Delete-one jackknife for the equilateral 3PCF; same conventions as
+  ! write_3pcf_jackknife (no weight renormalisation, N_m = N - N_touching(m)).
+  subroutine write_equilateral_jackknife()
+    integer :: l, k, m, unit_num, unit_err
+    real(kdkind) :: n2m, n3m, zeta_m(cfg%njk), z_mean, z_sigma
+
+    if (cfg%rank /= cfg%master) return
+    if (cfg%njk <= 0) return
+
+    unit_num = 31
+    unit_err = 32
+    open(unit_num, file=trim(mode_output_file('equi'))//'.jk', status='unknown')
+    call write_provenance(unit_num)
+    write(unit_num, '(a,i0)') '# delete-one jackknife realisations, njk = ', cfg%njk
+    write(unit_num, '(a)') '# rmin rmax mumin mumax ireal NNN RRR zeta'
+    open(unit_err, file=trim(mode_output_file('equi'))//'.jkerr', status='unknown')
+    call write_provenance(unit_err)
+    write(unit_err, '(a,i0)') '# delete-one jackknife error, njk = ', cfg%njk
+    write(unit_err, '(a)') '# rmin rmax mumin mumax zeta_mean_jk zeta_sigma_jk'
+
+    do l = 1, cfg%nbins
+      do k = 1, cfg%nmu
+        do m = 1, cfg%njk
+          n2m = N2(l, k, 3) - N2jk(l, k, 3, m)
+          n3m = N3(l, k, 3) - N3jk(l, k, 3, m)
+          if (n3m /= 0.0d0) then
+            zeta_m(m) = n2m / n3m
+          else
+            zeta_m(m) = 0.0d0
+          end if
+          write(unit_num, '(4(e14.7,1x),i6,1x,3(e14.7,1x))') &
+            radial_bins(l), radial_bins(l+1), &
+            ((float(k)-1.)/cfg%mu_scale/2.), (float(k)/cfg%mu_scale/2.), &
+            m, n2m, n3m, zeta_m(m)
+        end do
+        call jk_mean_sigma(zeta_m, z_mean, z_sigma)
+        write(unit_err, '(6(e14.7,1x))') radial_bins(l), radial_bins(l+1), &
+          ((float(k)-1.)/cfg%mu_scale/2.), (float(k)/cfg%mu_scale/2.), &
+          z_mean, z_sigma
+      end do
+    end do
+    close(unit_num)
+    close(unit_err)
+    print *, 'wrote jackknife realisations to ', trim(mode_output_file('equi'))//'.jk'
+  end subroutine write_equilateral_jackknife
 
 end module query_3pcf_module

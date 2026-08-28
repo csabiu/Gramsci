@@ -81,6 +81,9 @@ module config_module
     !   N_m = N_total - (sum over triplets touching region m)
     integer :: njk = 0
     character(len=2000) :: jkgal = '', jkran = ''
+    ! No -jkgal/-jkran given with -njk: partition the sky internally into
+    ! njk equal-count angular regions (see assign_jk_regions_angular).
+    logical :: jk_internal = .false.
   end type gramsci_config
 
   ! Singleton config instance
@@ -99,6 +102,10 @@ module config_module
   integer, allocatable :: bintable(:,:,:,:)
   ! 4PCF parity arrays
   real(kdkind), allocatable :: N4(:,:), R4(:,:)
+  ! Per-region sums of quadruplets TOUCHING each region, shape
+  ! (n_configs_4pcf, nch, njk) with nch = 1 (-4pcf) or 2 (-4pcfp).
+  ! Updated with !$OMP ATOMIC, not a reduction (see allocate_4pcf_jk).
+  real(kdkind), allocatable :: N4jk(:,:,:), R4jk(:,:,:)
   integer, allocatable :: bintable6(:,:,:,:,:,:)
   ! Canonical bin 6-tuple for each 4PCF config index (shape [6, n_configs_4pcf])
   integer, allocatable :: canon_bins_4pcf(:,:)
@@ -107,6 +114,9 @@ module config_module
   integer, allocatable :: orbit_mult_4pcf(:)
   ! Internal 2PCF for disconnected 4PCF subtraction
   real(kdkind), allocatable :: DD_2pcf(:), RR_2pcf(:), xi_2pcf(:)
+  ! Per-region touching sums of the internal 2PCF pair counts (nbins, njk),
+  ! used to form the per-realisation xi0 in the jackknifed zeta_disc.
+  real(kdkind), allocatable :: DD_2pcf_jk(:,:), RR_2pcf_jk(:,:)
   ! Pair Legendre-multipole sums (accumulated in create_graph when
   ! cfg%disc_rsd) and the resulting xi_2 / xi_4 multipoles, used for the
   ! anisotropic disconnected-4PCF subtraction in redshift space.
@@ -356,6 +366,33 @@ contains
       end if
     end if
 
+    ! --- Jackknife validation ---
+    if (cfg%njk < 0 .or. cfg%njk == 1) then
+      print *, 'ERROR: -njk must be >= 2 (delete-one needs at least 2 regions)'
+      stop 1
+    end if
+    if (cfg%njk > 0) then
+      cfg%jk_internal = (len_trim(cfg%jkgal) == 0 .and. len_trim(cfg%jkran) == 0)
+      if (cfg%analytic) then
+        print *, 'ERROR: -njk is incompatible with analytic randoms (-box without'
+        print *, '       -ran): the delete-one RR/RRR/RRRR of a region is undefined'
+        stop 1
+      end if
+      if (.not. cfg%rancat) then
+        print *, 'ERROR: -njk requires -ran (delete-one random counts)'
+        stop 1
+      end if
+      if (cfg%periodic .and. cfg%jk_internal) then
+        print *, 'ERROR: internal angular jackknife regions are undefined in a'
+        print *, '       periodic box (no observer direction); supply -jkgal/-jkran'
+        stop 1
+      end if
+      if (cfg%jk_internal .and. cfg%rank == cfg%master) then
+        print '(" jackknife: partitioning the sky internally into ",i0, &
+               &" equal-count angular regions")', cfg%njk
+      end if
+    end if
+
     ! Anisotropic disconnected-4PCF subtraction: needs a per-pair mu, which
     ! exists in a periodic box (plane-parallel z line of sight) or in survey
     ! mode when RSD (-nmu > 1) is on.  Costs a few percent at graph build.
@@ -445,6 +482,19 @@ contains
     print *, '       -ntheta N     polar direction bins   (default 8,  -4pcfp only)'
     print *, '       -nphi   M     azimuthal direction bins (default 32, N*M <= 32767)'
     print *, ' '
+    print *, 'JACKKNIFE ERRORS (delete-one, all query modes; requires -ran):'
+    print *, '       -njk N  number of jackknife regions.  Without -jkgal/-jkran'
+    print *, '               the sky (as seen from the origin) is partitioned'
+    print *, '               internally into N equal-count angular regions'
+    print *, '               (sin(dec) bands x phi slices; boundaries from the'
+    print *, '               randoms).  Purely angular by construction, so radial'
+    print *, '               and angular systematics are never mixed.  The labels'
+    print *, '               used are written to <out>.jkgal / <out>.jkran.'
+    print *, '       -jkgal  file with one region label (1..N) per galaxy row'
+    print *, '       -jkran  file with one region label (1..N) per random row'
+    print *, '       Each mode writes <out>[.<mode>].jk (realisations) and'
+    print *, '       <out>[.<mode>].jkerr (jackknife mean and sigma per bin).'
+    print *, ' '
     print *, 'QUERY MODES (combinable; the graph is built once per run):'
     print *, '       -2pcf   2-point correlation function'
     print *, '       -3pcf   3-point correlation function (all configs)'
@@ -513,8 +563,12 @@ contains
     if (allocated(orbit_mult_4pcf)) deallocate(orbit_mult_4pcf)
     if (allocated(bintable)) deallocate(bintable)
     if (allocated(zeta3_internal)) deallocate(zeta3_internal)
+    if (allocated(N4jk)) deallocate(N4jk)
+    if (allocated(R4jk)) deallocate(R4jk)
     if (allocated(DD_2pcf)) deallocate(DD_2pcf)
     if (allocated(RR_2pcf)) deallocate(RR_2pcf)
+    if (allocated(DD_2pcf_jk)) deallocate(DD_2pcf_jk)
+    if (allocated(RR_2pcf_jk)) deallocate(RR_2pcf_jk)
     if (allocated(xi_2pcf)) deallocate(xi_2pcf)
     if (allocated(sum_pair_l2)) deallocate(sum_pair_l2)
     if (allocated(sum_pair_l4)) deallocate(sum_pair_l4)
@@ -567,5 +621,48 @@ contains
     write(str, *) k
     str = adjustl(str)
   end function str
+
+  ! Allocate the 4PCF jackknife touching-sum arrays (nch = 1 for -4pcf,
+  ! 2 for -4pcfp).  Unlike N2jk/N3jk these are NOT named in an OpenMP
+  ! reduction: at 4PCF configuration counts a per-thread reduction copy of a
+  ! (n_configs, nch, njk) array would multiply memory by the thread count,
+  ! so the query kernels update them with !$OMP ATOMIC instead.  Collisions
+  ! are rare because the updates scatter over n_configs*njk slots (the same
+  ! reasoning as the OpenACC build's slot-strided jackknife partials).
+  subroutine allocate_4pcf_jk(nch)
+    integer, intent(in) :: nch
+    real(kdkind) :: gb
+    allocate(N4jk(cfg%n_configs_4pcf, nch, max(cfg%njk, 1)))
+    allocate(R4jk(cfg%n_configs_4pcf, nch, max(cfg%njk, 1)))
+    N4jk = 0.0d0
+    R4jk = 0.0d0
+    if (cfg%njk > 0) then
+      gb = 2.0d0 * real(cfg%n_configs_4pcf, kdkind) * real(nch, kdkind) * &
+           real(cfg%njk, kdkind) * 8.0d0 / 1.0d9
+      if (cfg%rank == 0) &
+        print '(" 4PCF jackknife accumulators: ",f8.2," GB")', gb
+      if (gb > 64.0d0) then
+        print *, 'ERROR: 4PCF jackknife accumulators exceed 64 GB;'
+        print *, '       reduce -njk or -nbins'
+        stop 1
+      end if
+    end if
+  end subroutine allocate_4pcf_jk
+
+  subroutine free_4pcf_jk()
+    if (allocated(N4jk)) deallocate(N4jk)
+    if (allocated(R4jk)) deallocate(R4jk)
+  end subroutine free_4pcf_jk
+
+  ! Delete-one jackknife mean and error of one quantity from its njk
+  ! realisations:  sigma^2 = (njk-1)/njk * sum_m (x_m - xbar)^2.
+  subroutine jk_mean_sigma(vals, mean, sigma)
+    real(kdkind), intent(in) :: vals(:)
+    real(kdkind), intent(out) :: mean, sigma
+    integer :: n
+    n = size(vals)
+    mean = sum(vals) / real(n, kdkind)
+    sigma = sqrt(real(n - 1, kdkind) / real(n, kdkind) * sum((vals - mean)**2))
+  end subroutine jk_mean_sigma
 
 end module config_module

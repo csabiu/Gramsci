@@ -571,6 +571,11 @@ def main():
     test_combined_modes(bindir)
     test_aniso_disconnected(bindir)
 
+    # ---- Jackknife tests (internal angular partition + brute-force
+    #      delete-one identities for every statistic) ----
+    import test_jackknife
+    test_jackknife.run_all(bindir)
+
     print('\n========================================')
     print('All correlation tests passed')
     print('========================================')
