@@ -57,6 +57,14 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   a pre-existing OpenCL bug, present at baseline, fixed separately).
 
 ### Fixed
+- **The graph-RAM estimate sampled only data points**: every point (data
+  and randoms alike) is a hub, and with clustered data the data hubs see
+  systematically more neighbors than the uniform randoms that dominate
+  the catalogue -- measured 3.7x overestimation on a clustered mock (491
+  vs a true all-hub mean of 132 neighbors). The estimator now samples the
+  whole catalogue, lives in one shared routine instead of two per-driver
+  copies, and the OpenCL driver -- which sampled the neighbor counts and
+  then never printed anything -- now reports the estimate too.
 - **Segfault at multi-million-point catalogues** (silent, no backtrace,
   inside the KD-tree build): `-Ofast` implies `-fstack-arrays`, and the
   vector-subscript gather `sum(the_data(c, ind(l:u)))` in

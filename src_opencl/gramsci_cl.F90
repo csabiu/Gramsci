@@ -26,10 +26,9 @@ program gramsci_cl
   INCLUDE "omp_lib.h"
 
   type(kdtree2), pointer :: kd_tree
-  integer :: i, j, nn2, thread, threads
-  real(kdkind) :: start, rand_val, avg_neighbors
+  integer :: i, j, thread, threads
+  real(kdkind) :: start
   integer(8) :: wt0, wt1, wt_rate
-  real(kdkind), allocatable :: sample_vec(:)
 
   thread = 0
   threads = 1
@@ -84,16 +83,9 @@ program gramsci_cl
   call read_jk_regions()
   call allocate_result_arrays()
 
-  ! ---- Memory estimation ----
-  allocate(sample_vec(100))
-  do i = 1, 100
-    call random_number(rand_val)
-    j = floor(rand_val * cfg%num_data) + 1
-    nn2 = kdtree2_r_count_around_point(tp=kd_tree, idxin=j, correltime=-1, r2=cfg%rmax*cfg%rmax)
-    sample_vec(i) = real(nn2, kdkind)
-  end do
-  avg_neighbors = sum(sample_vec) / size(sample_vec)
-  deallocate(sample_vec)
+  ! ---- Memory estimation (this driver used to sample avg_neighbors and
+  !      then never print it; now it reports like the other builds) ----
+  call print_graph_ram_estimate(kd_tree)
 
   ! ---- Compute bin parameters ----
   if (cfg%logbins) then

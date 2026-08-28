@@ -302,6 +302,42 @@ contains
 
   end subroutine create_graph
 
+  ! Print a first-principles estimate of the graph RAM: sample hub
+  ! neighbor counts within rmax over the WHOLE catalogue -- data and
+  ! randoms alike, since every point is a hub.  (The old per-driver
+  ! version sampled only data points, which biases the estimate: clustered
+  ! data hubs see systematically more neighbors than the uniform randoms
+  ! that usually dominate the catalogue.)
+  subroutine print_graph_ram_estimate(tree)
+    type(kdtree2), pointer, intent(in) :: tree
+    integer, parameter :: NSAMPLE = 100
+    integer :: s, j, nc, ntotal, bpe
+    real(kdkind) :: rv, avg, mem_half_gb
+
+    if (cfg%rank /= 0) return
+    ntotal = cfg%num_data + cfg%num_rand
+    avg = 0.0d0
+    do s = 1, NSAMPLE
+      call random_number(rv)
+      j = min(ntotal, int(rv * real(ntotal, kdkind)) + 1)
+      nc = kdtree2_r_count_around_point(tp=tree, idxin=j, correltime=-1, &
+           r2=cfg%rmax*cfg%rmax)
+      avg = avg + real(nc, kdkind)
+    end do
+    avg = avg / real(NSAMPLE, kdkind)
+
+    ! Bytes per stored neighbor edge:
+    !   id(int32=4B) + dist(int8=1B) + mu(int8=1B) [+ phi(int16=2B) for parity]
+    bpe = 6
+    ! -exactparity stores no per-edge direction index
+    if (cfg%four_pcf_parity .and. .not. cfg%exact_parity) bpe = 8
+    ! Half-graph stores only edges where neighbor_id > hub_id -> 0.5x entries
+    mem_half_gb = dble(ntotal) * avg * dble(bpe) * 0.5d0 / 1073741824.0d0
+    print '("Est. graph RAM: ",f8.2," GB")', mem_half_gb
+    if (mem_half_gb > 80.0d0) &
+      print *, 'WARNING: estimated graph RAM > 80 GB -- consider reducing N or rmax'
+  end subroutine print_graph_ram_estimate
+
   ! Sample hub neighbor counts to choose the initial per-thread search
   ! scratch size.  Twice the sampled maximum plus headroom absorbs density
   ! fluctuations and (in periodic mode) the image-center aggregation near

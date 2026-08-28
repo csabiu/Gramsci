@@ -13,10 +13,9 @@ program Ngramsci
   INCLUDE "omp_lib.h"
 
   type(kdtree2), pointer :: kd_tree
-  integer :: i, j, nn2, thread, threads
-  real(kdkind) :: start, finish, rand_val, avg_neighbors
+  integer :: i, j, thread, threads
+  real(kdkind) :: start, finish
   logical :: use_bsearch
-  real(kdkind), allocatable :: sample_vec(:)
 
   thread = 0
   threads = 1
@@ -67,35 +66,8 @@ program Ngramsci
   call read_jk_regions()
   call allocate_result_arrays()
 
-  ! ---- Memory estimation (first-principles) ----
-  ! Sample 100 random hubs to estimate mean neighbor count within rmax.
-  ! kdtree2_r_count_around_point returns a scalar count, no resultsb needed.
-  allocate(sample_vec(100))
-  do i = 1, 100
-    call random_number(rand_val)
-    j = floor(rand_val * cfg%num_data) + 1
-    nn2 = kdtree2_r_count_around_point(tp=kd_tree, idxin=j, correltime=-1, r2=cfg%rmax*cfg%rmax)
-    sample_vec(i) = real(nn2, kdkind)
-  end do
-  avg_neighbors = sum(sample_vec) / size(sample_vec)
-  deallocate(sample_vec)
-  if (cfg%rank == 0) then
-    block
-      integer :: bpe
-      real(kdkind) :: mem_half_gb, mem_peak_gb
-      ! Bytes per stored neighbor edge:
-      !   id(int32=4B) + dist(int8=1B) + mu(int8=1B) [+ phi(int16=2B) for parity]
-      bpe = 6
-      ! -exactparity stores no per-edge direction index
-      if (cfg%four_pcf_parity .and. .not. cfg%exact_parity) bpe = 8
-      ! Half-graph stores only edges where neighbor_id > hub_id → 0.5x entries
-      mem_half_gb = dble(cfg%num_data + cfg%num_rand) * avg_neighbors &
-                    * dble(bpe) * 0.5d0 / 1073741824.0d0
-      print '("Est. graph RAM: ",f8.2," GB")', mem_half_gb
-      if (mem_half_gb > 80.0d0) &
-        print *, 'WARNING: estimated graph RAM > 80 GB -- consider reducing N or rmax'
-    end block
-  end if
+  ! ---- Memory estimation (first-principles; samples the whole catalogue) ----
+  call print_graph_ram_estimate(kd_tree)
 
   ! ---- Compute bin parameters ----
   if (cfg%logbins) then
