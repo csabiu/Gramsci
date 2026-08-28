@@ -122,6 +122,26 @@ def _build_bintable6(nbins):
     return table, canon
 
 
+def _check_jkcov(path, jk_rows, est_col, njk, sigma=None):
+    """Verify a .jkcov file: symmetry, agreement with the covariance built
+    directly from the .jk realisations, and (optionally) that its diagonal
+    matches the .jkerr sigma^2 -- all to file precision."""
+    C = np.loadtxt(path, comments='#', ndmin=2)
+    n = C.shape[0]
+    assert C.shape == (n, n), f'{path}: not square'
+    assert np.allclose(C, C.T, rtol=1e-6, atol=1e-30), f'{path}: not symmetric'
+    x = jk_rows[:, est_col].reshape(n, njk)
+    d = x - x.mean(axis=1, keepdims=True)
+    Cref = (njk - 1) / njk * (d @ d.T)
+    scale = np.abs(Cref).max()
+    assert np.allclose(C, Cref, rtol=2e-6, atol=1e-6 * scale), \
+        f'{path}: does not match covariance of the .jk realisations'
+    if sigma is not None:
+        assert np.allclose(np.sqrt(np.diag(C)), sigma,
+                           rtol=3e-6, atol=1e-6 * np.abs(sigma).max() + 1e-30), \
+            f'{path}: diagonal does not match .jkerr sigma^2'
+
+
 def _assert_rows(name, got, want, scale):
     """Compare against file values: e14.7 rounding + summation-order slack."""
     tol = 1.0e-6 * np.abs(want) + 1.0e-9 * scale + 1.0e-30
@@ -273,6 +293,14 @@ def test_jackknife_2pcf_3pcf_equi(bindir):
         assert abs(err2[b - 1, 5] - sig) <= 1e-5 * sig + 1e-9, \
             f'2pcf jkerr sigma mismatch bin {b}'
 
+    # covariance files: symmetric, match the realisations, diag == sigma^2
+    _check_jkcov(out + '.2pcf.jkcov', jk2, 7, njk, sigma=err2[:, 5])
+    err3 = np.loadtxt(out + '.3pcf.jkerr', comments='#')
+    _check_jkcov(out + '.3pcf.jkcov', jk3, 9, njk, sigma=err3[:, 7])
+    erre = np.loadtxt(out + '.equi.jkerr', comments='#')
+    _check_jkcov(out + '.equi.jkcov', jke, 7, njk, sigma=erre[:, 5])
+    print('  .jkcov files verified against realisations and .jkerr')
+
     print('  2PCF/3PCF/equi delete-one identities verified')
     _cleanup(gal, ran)
     _cleanup_glob(out)
@@ -363,6 +391,12 @@ def test_jackknife_4pcf_parity(bindir):
     # channel), and the full-sample table row order must match canon order.
     _assert_rows('4pcfp conn_odd == zeta_odd', jk4[:, 17], jk4[:, 20],
                  np.abs(jk4[:, 17]).max())
+
+    # covariance files: conn_even + the odd channel
+    err4 = np.loadtxt(out + '.jkerr', comments='#')
+    _check_jkcov(out + '.jkcov', jk4, 19, njk, sigma=err4[:, 17])
+    _check_jkcov(out + '.jkcov_odd', jk4, 20, njk, sigma=err4[:, 15])
+    print('  4pcfp .jkcov / .jkcov_odd verified')
 
     full = np.loadtxt(out, comments='#')
     for c in range(1, ncfg + 1):

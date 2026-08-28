@@ -60,6 +60,11 @@ module config_module
     ! In a periodic box the line of sight is plane-parallel (z axis); in
     ! survey mode it is the pair midpoint direction (requires -nmu > 1).
     logical :: disc_rsd = .false.
+    ! Accumulate the pair Legendre sums at graph build (superset of
+    ! disc_rsd): also set for standalone -2pcf whenever a per-pair mu
+    ! exists (periodic box: plane-parallel z; survey mode: -nmu > 1), so
+    ! write_2pcf_results can emit the xi0/xi2/xi4 multipoles (.mult).
+    logical :: pair_mult = .false.
     character(len=2000) :: file1 = '', file2 = ''
     character(len=2000) :: output_file = 'result.txt'
     ! Which build is running ('cpu' | 'openacc' | 'opencl'); set by the
@@ -397,6 +402,12 @@ contains
       print *, '4PCF: accumulating pair multipoles (xi_2, xi_4) for the'
       print *, '      anisotropic disconnected-term subtraction'
     end if
+    cfg%pair_mult = cfg%disc_rsd .or. &
+                    (cfg%two_pcf .and. (cfg%periodic .or. cfg%RSD))
+    if (cfg%pair_mult .and. .not. cfg%disc_rsd .and. cfg%rank == cfg%master) then
+      print *, '2PCF: accumulating pair multipoles; xi0/xi2/xi4 will be'
+      print *, '      written to <out>[.2pcf].mult'
+    end if
 
   contains
 
@@ -652,6 +663,40 @@ contains
     if (allocated(N4jk)) deallocate(N4jk)
     if (allocated(R4jk)) deallocate(R4jk)
   end subroutine free_4pcf_jk
+
+  ! Write the delete-one jackknife covariance of one estimator:
+  !   C_ij = (njk-1)/njk * sum_m (x_i^m - xbar_i)(x_j^m - xbar_j)
+  ! vals(nrows, njk), with row order matching the main output file, so
+  ! C can be paired with it directly.  Fits inverting C should apply the
+  ! Hartlap factor (njk - nrows - 2)/(njk - 1).
+  subroutine write_jk_covariance(fname, vals)
+    character(len=*), intent(in) :: fname
+    real(kdkind), intent(in) :: vals(:,:)
+    integer :: unit_num, i, j, nrows, nreal
+    real(kdkind), allocatable :: d(:,:)
+    real(kdkind) :: fac
+
+    nrows = size(vals, 1)
+    nreal = size(vals, 2)
+    allocate(d(nrows, nreal))
+    do i = 1, nrows
+      d(i, :) = vals(i, :) - sum(vals(i, :)) / real(nreal, kdkind)
+    end do
+    fac = real(nreal - 1, kdkind) / real(nreal, kdkind)
+
+    open(newunit=unit_num, file=fname, status='unknown')
+    call write_provenance(unit_num)
+    write(unit_num, '(a,i0,a,i0,a,i0)') '# delete-one jackknife covariance: ', &
+      nrows, ' x ', nrows, ' matrix, njk = ', nreal
+    write(unit_num, '(a)') '# C_ij = (njk-1)/njk sum_m (x_i^m - xbar_i)(x_j^m - xbar_j);'
+    write(unit_num, '(a)') '#   row/column order matches the main output file rows.'
+    write(unit_num, '(a)') '#   Apply the Hartlap factor (njk - nrows - 2)/(njk - 1) when inverting.'
+    do i = 1, nrows
+      write(unit_num, '(*(e14.7,1x))') (fac * dot_product(d(i,:), d(j,:)), j = 1, nrows)
+    end do
+    close(unit_num)
+    deallocate(d)
+  end subroutine write_jk_covariance
 
   ! Delete-one jackknife mean and error of one quantity from its njk
   ! realisations:  sigma^2 = (njk-1)/njk * sum_m (x_m - xbar)^2.

@@ -53,8 +53,8 @@ contains
     ! direction index is not needed at all (saves 2 B/edge).
     store_phi = cfg%four_pcf_parity .and. .not. cfg%exact_parity
 
-    ! Pair Legendre-multipole sums for the anisotropic disconnected-4PCF
-    ! subtraction.  Accumulated here because this is the only place the
+    ! Pair Legendre-multipole sums (anisotropic disconnected-4PCF
+    ! subtraction and/or standalone 2PCF multipoles).  Accumulated here because this is the only place the
     ! full-precision pair mu exists; each hub is visited exactly once across
     ! the drivers' probe (1..999) and main (1000..) sweeps, so no reset.
     if (.not. allocated(sum_pair_l2)) then
@@ -184,7 +184,7 @@ contains
           output(i)%dist(k) = int(min(cfg%nbins, max(1, j)), int8)
           output(i)%id(k) = resultsb(k)%idx
 
-          if (cfg%disc_rsd) then
+          if (cfg%pair_mult) then
             ! Plane-parallel line of sight (z axis): mu of the min-image pair.
             dz = points(3, resultsb(k)%idx) - centers(3, rescen(k))
             mu2 = dz * dz / resultsb(k)%dis
@@ -255,9 +255,9 @@ contains
         output(i)%dist(k) = int(min(cfg%nbins, max(1, jbin)), int8)
         output(i)%id(k) = resultsb(j)%idx
 
-        ! Survey mode: disc_rsd implies cfg%RSD, so theta (the midpoint-LOS
-        ! pair mu) was computed above.
-        if (cfg%disc_rsd) then
+        ! Survey mode: pair_mult implies cfg%RSD here, so theta (the
+        ! midpoint-LOS pair mu) was computed above.
+        if (cfg%pair_mult) then
           mu2 = theta * theta
           wpair = weights(i) * weights(resultsb(j)%idx)
           bin_m = int(output(i)%dist(k))

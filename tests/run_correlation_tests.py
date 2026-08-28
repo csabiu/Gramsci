@@ -245,6 +245,95 @@ def test_empty_bins_finite(bindir):
     print("  Test PASSED")
 
 
+def test_2pcf_multipoles(bindir):
+    """xi0/xi2/xi4 multipoles: exact single-orientation identities.
+
+    Isolated pairs all at the SAME mu make the multipoles analytic: every
+    pair contributes L_ell(mu0) exactly, so xi_ell = (2l+1) L_ell(mu0)
+    (xi0 + 1) in analytic-box mode.  z-oriented pairs (mu = 1, plane-
+    parallel LOS): xi2 = 5(xi0+1), xi4 = 9(xi0+1).  xy-oriented (mu = 0):
+    xi2 = -2.5(xi0+1), xi4 = 3.375(xi0+1).
+    """
+    print('\n=== Test: 2PCF Legendre multipoles (.mult) ===')
+
+    rng = np.random.default_rng(SEED)
+    gramsci = os.path.join(bindir, 'gramsci')
+    box, r0, n_pairs = 500.0, 12.5, 400
+
+    def run_orientation(offset, tag):
+        gal = f'tmp_mult_{tag}.gal'
+        out = f'tmp_mult_{tag}.out'
+        # isolated pairs on a coarse jittered grid: 40-spacing sites with
+        # 2-unit jitter keep every cross-structure separation > rmax = 20,
+        # so ALL counted pairs sit at exactly the injected orientation
+        # (random centers would admit ~100 cross pairs at random mu and
+        # dilute the multipoles by several percent).
+        g = np.arange(20.0, box - 20.0, 40.0)
+        sites = np.array(np.meshgrid(g, g, g)).reshape(3, -1).T
+        base = (sites[rng.choice(len(sites), n_pairs, replace=False)]
+                + rng.random((n_pairs, 3)) * 2.0)
+        pts = np.empty((2 * n_pairs, 3))
+        pts[0::2] = base
+        pts[1::2] = base + offset
+        np.savetxt(gal, pts, fmt='%.10e')
+        run(f"{gramsci} -gal {gal} -box {box:g} -rmin 5 -rmax 20 -nbins 3 "
+            f"-nmu 1 -out {out} -2pcf")
+        mult = np.loadtxt(out + '.mult', comments='#')
+        _cleanup(gal, out, out + '.mult')
+        return mult[1]  # bin 2 holds r0 = 12.5
+
+    row = run_orientation(np.array([0.0, 0.0, r0]), 'z')
+    xi0, xi2, xi4 = row[2], row[3], row[4]
+    print(f"  z-pairs (mu=1):  xi0={xi0:.4f}  xi2={xi2:.4f}  xi4={xi4:.4f}")
+    assert xi0 > 5.0, 'z-pairs: expected a strong monopole spike'
+    assert abs(xi2 - 5.0 * (xi0 + 1.0)) < 1e-5 * (xi0 + 1.0), \
+        'z-pairs: xi2 != 5(xi0+1)'
+    assert abs(xi4 - 9.0 * (xi0 + 1.0)) < 1e-5 * (xi0 + 1.0), \
+        'z-pairs: xi4 != 9(xi0+1)'
+
+    row = run_orientation(np.array([r0, 0.0, 0.0]), 'xy')
+    xi0, xi2, xi4 = row[2], row[3], row[4]
+    print(f"  xy-pairs (mu=0): xi0={xi0:.4f}  xi2={xi2:.4f}  xi4={xi4:.4f}")
+    assert abs(xi2 + 2.5 * (xi0 + 1.0)) < 1e-5 * (xi0 + 1.0), \
+        'xy-pairs: xi2 != -2.5(xi0+1)'
+    assert abs(xi4 - 3.375 * (xi0 + 1.0)) < 1e-5 * (xi0 + 1.0), \
+        'xy-pairs: xi4 != 3.375(xi0+1)'
+    print("  single-orientation multipole identities verified")
+
+    # survey mode (midpoint LOS, -nmu > 1): radially oriented pairs sit at
+    # mu = 1 exactly; with randoms diluting DR/RR the identity is only
+    # approximate, so assert the strong positive quadrupole qualitatively.
+    gal, ran, out = 'tmp_mult_s.gal', 'tmp_mult_s.ran', 'tmp_mult_s.out'
+    u = rng.random(n_pairs); r = (60.0**3 + u * (130.0**3 - 60.0**3)) ** (1/3)
+    mu = 2 * rng.random(n_pairs) - 1
+    ph = 2 * np.pi * rng.random(n_pairs)
+    sn = np.sqrt(1 - mu * mu)
+    rhat = np.column_stack([sn * np.cos(ph), sn * np.sin(ph), mu])
+    base = rhat * r[:, None]
+    pts = np.empty((2 * n_pairs, 3))
+    pts[0::2] = base - 0.5 * r0 * rhat
+    pts[1::2] = base + 0.5 * r0 * rhat
+    np.savetxt(gal, pts, fmt='%.10e')
+    v = rng.random(6000); rr = (60.0**3 + v * (130.0**3 - 60.0**3)) ** (1/3)
+    mur = 2 * rng.random(6000) - 1; phr = 2 * np.pi * rng.random(6000)
+    snr = np.sqrt(1 - mur * mur)
+    np.savetxt(ran, np.column_stack([rr * snr * np.cos(phr),
+                                     rr * snr * np.sin(phr), rr * mur]),
+               fmt='%.10e')
+    run(f"{gramsci} -gal {gal} -ran {ran} -rmin 5 -rmax 20 -nbins 3 "
+        f"-nmu 10 -out {out} -2pcf")
+    mult = np.loadtxt(out + '.mult', comments='#')
+    xi0, xi2 = mult[1, 2], mult[1, 3]
+    print(f"  survey radial pairs: xi0={xi0:.4f}  xi2={xi2:.4f}  "
+          f"ratio={xi2 / xi0:.2f} (expect ~5)")
+    assert xi0 > 1.0 and 3.5 < xi2 / xi0 < 6.5, \
+        'survey-mode quadrupole of radial pairs should be ~5x the monopole'
+    print("  survey-mode (midpoint LOS) quadrupole verified")
+
+    _cleanup(gal, ran, out, out + '.mult')
+    print("  Test PASSED")
+
+
 def test_stack_scaling(bindir):
     """The KD-tree build must not allocate O(N) temporaries on the stack.
 
@@ -725,6 +814,7 @@ def main():
     test_regular_tetra_connected(bindir)
     test_chiral_parity(bindir)
     test_empty_bins_finite(bindir)
+    test_2pcf_multipoles(bindir)
     test_stack_scaling(bindir)
     test_periodic_parity(bindir)
     test_analytic_randoms(bindir)

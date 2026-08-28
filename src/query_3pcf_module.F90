@@ -373,11 +373,13 @@ contains
   ! that the randoms trace the selection, and that factor cancels in the ratio
   ! zeta = N2/N3.
   subroutine write_3pcf_jackknife()
-    integer :: i, j, k, l, m, unit_num, unit_err
+    integer :: i, j, k, l, m, unit_num, unit_err, r
     real(kdkind) :: n2m, n3m, zeta_m(cfg%njk), z_mean, z_sigma
+    real(kdkind) :: z_all(cfg%config_bins * cfg%nmu, max(cfg%njk, 1))
 
     if (cfg%rank /= cfg%master) return
     if (cfg%njk <= 0) return
+    r = 0
     ! The analytic 4PCF's internal 3PCF pass must never emit jackknife files
     ! (analytic mode rejects -njk anyway; this is belt and braces).
     if (cfg%internal_3pcf) return
@@ -436,6 +438,8 @@ contains
                 radial_bins(i), radial_bins(i+1), radial_bins(j), radial_bins(j+1), &
                 radial_bins(k), radial_bins(k+1), z_mean, z_sigma
             end if
+            r = r + 1
+            z_all(r, :) = zeta_m
           end do
           end associate
         end do
@@ -443,6 +447,7 @@ contains
     end do
     close(unit_num)
     close(unit_err)
+    call write_jk_covariance(trim(mode_output_file('3pcf'))//'.jkcov', z_all)
     print *, 'wrote jackknife realisations to ', trim(mode_output_file('3pcf'))//'.jk'
   end subroutine write_3pcf_jackknife
 
@@ -486,8 +491,9 @@ contains
   ! Delete-one jackknife for the equilateral 3PCF; same conventions as
   ! write_3pcf_jackknife (no weight renormalisation, N_m = N - N_touching(m)).
   subroutine write_equilateral_jackknife()
-    integer :: l, k, m, unit_num, unit_err
+    integer :: l, k, m, unit_num, unit_err, r
     real(kdkind) :: n2m, n3m, zeta_m(cfg%njk), z_mean, z_sigma
+    real(kdkind) :: z_all(cfg%nbins * cfg%nmu, max(cfg%njk, 1))
 
     if (cfg%rank /= cfg%master) return
     if (cfg%njk <= 0) return
@@ -520,10 +526,13 @@ contains
         write(unit_err, '(6(e14.7,1x))') radial_bins(l), radial_bins(l+1), &
           ((float(k)-1.)/cfg%mu_scale/2.), (float(k)/cfg%mu_scale/2.), &
           z_mean, z_sigma
+        r = (l - 1) * cfg%nmu + k
+        z_all(r, :) = zeta_m
       end do
     end do
     close(unit_num)
     close(unit_err)
+    call write_jk_covariance(trim(mode_output_file('equi'))//'.jkcov', z_all)
     print *, 'wrote jackknife realisations to ', trim(mode_output_file('equi'))//'.jk'
   end subroutine write_equilateral_jackknife
 

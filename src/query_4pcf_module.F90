@@ -1140,10 +1140,16 @@ contains
   subroutine write_4pcf_jackknife(parity)
     logical, intent(in) :: parity
     integer :: config_idx, m, bb, unit_num, unit_err, b(6)
+    ! Covariance matrices scale as n_configs^2: write them only up to this
+    ! many configurations (a 1000x1000 text matrix is ~22 MB); beyond that
+    ! build the covariance from the .jk realisations (Python:
+    ! FourPCFResult.jk_covariance()).
+    integer, parameter :: JKCOV_MAX_CONFIGS = 1000
     real(kdkind) :: ddm, rrm, n4m, r4m, n4om, disc
     real(kdkind) :: zeta_m(cfg%njk), conn_m(cfg%njk), odd_m(cfg%njk)
     real(kdkind) :: z_mean, z_sigma, c_mean, c_sigma, o_mean, o_sigma
-    real(kdkind), allocatable :: xi0_all(:,:)
+    real(kdkind), allocatable :: xi0_all(:,:), conn_all(:,:), odd_all(:,:)
+    logical :: do_cov
     character(len=5) :: mode
 
     if (cfg%rank /= cfg%master) return
@@ -1165,6 +1171,12 @@ contains
         end if
       end do
     end do
+
+    do_cov = cfg%n_configs_4pcf <= JKCOV_MAX_CONFIGS
+    if (do_cov) then
+      allocate(conn_all(cfg%n_configs_4pcf, cfg%njk))
+      if (parity) allocate(odd_all(cfg%n_configs_4pcf, cfg%njk))
+    end if
 
     open(newunit=unit_num, file=trim(mode_output_file(trim(mode)))//'.jk', status='unknown')
     call write_provenance(unit_num)
@@ -1233,6 +1245,10 @@ contains
             m, n4m, r4m, zeta_m(m), disc, conn_m(m)
         end if
       end do
+      if (do_cov) then
+        conn_all(config_idx, :) = conn_m
+        if (parity) odd_all(config_idx, :) = odd_m
+      end if
       call jk_mean_sigma(zeta_m, z_mean, z_sigma)
       call jk_mean_sigma(conn_m, c_mean, c_sigma)
       if (parity) then
@@ -1259,6 +1275,19 @@ contains
     close(unit_num)
     close(unit_err)
     deallocate(xi0_all)
+    ! Covariance of the connected estimator (the science quantity); the
+    ! parity run additionally gets the odd channel's covariance.
+    if (do_cov) then
+      call write_jk_covariance(trim(mode_output_file(trim(mode)))//'.jkcov', &
+                               conn_all)
+      if (parity) &
+        call write_jk_covariance(trim(mode_output_file(trim(mode)))//'.jkcov_odd', &
+                                 odd_all)
+    else
+      print '(" jackknife covariance skipped (",i0," configs > ",i0,"): build it")', &
+        cfg%n_configs_4pcf, JKCOV_MAX_CONFIGS
+      print *, '  from the .jk realisations (Python: FourPCFResult.jk_covariance())'
+    end if
     print '(" wrote ",i0," jackknife realisation rows to ",a)', &
       cfg%n_configs_4pcf * cfg%njk, trim(mode_output_file(trim(mode)))//'.jk'
   end subroutine write_4pcf_jackknife

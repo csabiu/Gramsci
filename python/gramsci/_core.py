@@ -78,6 +78,69 @@ def _load_jk(out, stdout, njk):
     return real, err
 
 
+def hartlap_factor(njk, nbins):
+    """Multiplicative correction for the inverse of a jackknife covariance.
+
+    An inverse covariance estimated from njk realisations over nbins bins
+    is biased high; multiply the inverse by (njk - nbins - 2)/(njk - 1)
+    (Hartlap, Simon & Schneider 2007) before using it in a likelihood.
+    Requires njk > nbins + 2.
+    """
+    if njk <= nbins + 2:
+        raise ValueError(
+            f"njk = {njk} must exceed nbins + 2 = {nbins + 2} for an "
+            f"invertible jackknife covariance")
+    return (njk - nbins - 2) / (njk - 1)
+
+
+def _jk_cov(real, col):
+    """Delete-one jackknife covariance from the realisation table."""
+    x = real[:, :, col]                     # (nrows, njk)
+    njk = x.shape[1]
+    d = x - x.mean(axis=1, keepdims=True)
+    return (njk - 1) / njk * (d @ d.T)
+
+
+class _JKCovMixin:
+    """jk_covariance() for result objects computed with njk > 0."""
+
+    def jk_covariance(self, column=None):
+        """Delete-one jackknife covariance matrix of one estimator column.
+
+        C_ij = (njk-1)/njk sum_m (x_i^m - xbar_i)(x_j^m - xbar_j), with
+        row order matching the result arrays.  column defaults to the
+        primary estimator of the mode; see the class's _jk_columns for the
+        available names.  Remember hartlap_factor() when inverting.
+        """
+        if not hasattr(self, 'jk_real'):
+            raise ValueError(
+                "no jackknife realisations on this result: rerun the "
+                "compute_* call with njk > 0")
+        cols = self._jk_columns()
+        if column is None:
+            column = self._jk_default
+        if column not in cols:
+            raise ValueError(
+                f"unknown column {column!r}; available: {sorted(cols)}")
+        return _jk_cov(self.jk_real, cols[column])
+
+    def jk_inverse_covariance(self, column=None, hartlap=True):
+        """Inverse jackknife covariance, Hartlap-corrected BY DEFAULT.
+
+        The raw inverse of a noisy covariance estimate is biased high;
+        this multiplies it by (njk - nbins - 2)/(njk - 1) (Hartlap, Simon
+        & Schneider 2007) so it can go straight into a Gaussian
+        likelihood.  Pass hartlap=False for the uncorrected inverse.
+        Requires njk > nbins + 2 (more regions than bins), otherwise the
+        covariance is singular and this raises.
+        """
+        C = self.jk_covariance(column)
+        Cinv = np.linalg.inv(C)
+        if hartlap:
+            Cinv = Cinv * hartlap_factor(self.njk, C.shape[0])
+        return Cinv
+
+
 def _box_arg(box):
     """Format the -box argument: scalar L or (Lx, Ly, Lz)."""
     box = np.atleast_1d(np.asarray(box, dtype=np.float64))
@@ -92,7 +155,7 @@ def _box_arg(box):
 # Result containers
 # ---------------------------------------------------------------------------
 
-class TwoPCFResult:
+class TwoPCFResult(_JKCovMixin):
     """Result of compute_2pcf.
 
     Attributes
@@ -119,11 +182,17 @@ class TwoPCFResult:
         self.r      = 0.5 * (self.r_min + self.r_max)
         self.nmu    = len(np.unique(self.mu_min))
 
+    _jk_default = 'xi'
+
+    def _jk_columns(self):
+        # .jk columns: rmin rmax mumin mumax ireal NN RR xi
+        return {'NN': 5, 'RR': 6, 'xi': 7}
+
     def __repr__(self):
         return f"TwoPCFResult(nbins={len(self.r) // self.nmu}, nmu={self.nmu})"
 
 
-class ThreePCFResult:
+class ThreePCFResult(_JKCovMixin):
     """Result of compute_3pcf (all triangle configurations).
 
     Attributes
@@ -163,11 +232,18 @@ class ThreePCFResult:
         self.r3     = 0.5 * (self.r3_min + self.r3_max)
         self.n_configs = len(self.zeta)
 
+    _jk_default = 'zeta'
+
+    def _jk_columns(self):
+        # .jk columns: 6 edges [+ 2 mu-bin edges with RSD] + ireal NNN RRR zeta
+        base = 9 if self.jk_real.shape[2] == 12 else 7
+        return {'NNN': base, 'RRR': base + 1, 'zeta': base + 2}
+
     def __repr__(self):
         return f"ThreePCFResult(n_configs={self.n_configs})"
 
 
-class FourPCFResult:
+class FourPCFResult(_JKCovMixin):
     """Result of compute_4pcf.
 
     Standard (parity=False)
@@ -207,6 +283,19 @@ class FourPCFResult:
             self.zeta      = data[:, 14]
             self.zeta_disc = data[:, 15]
             self.zeta_conn = data[:, 16]
+
+    @property
+    def _jk_default(self):
+        return 'zeta_conn_even' if self.parity else 'zeta_conn'
+
+    def _jk_columns(self):
+        # .jk columns: 12 edges + ireal + counts/estimators (parity adds odd)
+        if self.parity:
+            return {'NNNN': 13, 'RRRR': 14, 'zeta_even': 15, 'NNNN_odd': 16,
+                    'zeta_odd': 17, 'zeta_disc': 18, 'zeta_conn_even': 19,
+                    'zeta_conn_odd': 20}
+        return {'NNNN': 13, 'RRRR': 14, 'zeta': 15, 'zeta_disc': 16,
+                'zeta_conn': 17}
 
     def __repr__(self):
         kind = 'parity' if self.parity else 'connected'
@@ -267,6 +356,13 @@ def compute_2pcf(positions, weights, randoms_pos=None, randoms_weights=None,
             args += ['-box', _box_arg(box)]
         stdout = _run(args, tmp)
         result = TwoPCFResult(_load(out, stdout))
+        # Legendre multipoles are written whenever a per-pair mu exists
+        # (periodic box: plane-parallel z; survey mode: nmu > 1).
+        if os.path.exists(out + '.mult'):
+            mult = _load(out + '.mult', stdout)
+            result.xi0 = mult[:, 2]
+            result.xi2 = mult[:, 3]
+            result.xi4 = mult[:, 4]
         if njk:
             real, err = _load_jk(out, stdout, njk)
             result.njk = njk

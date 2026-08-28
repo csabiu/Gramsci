@@ -156,6 +156,16 @@ angle fixed by the bin geometry. For real-space data ξ₂ ≈ ξ₄ ≈ 0 and t
 reduces to the usual isotropic product. The parity-odd channel involves no
 disconnected term and is unaffected.
 
+### 2PCF Legendre multipoles
+
+Whenever a per-pair μ exists — a periodic box (plane-parallel line of sight
+along z) or survey mode with `-nmu > 1` (midpoint line of sight) — `-2pcf`
+additionally writes `<out>[.2pcf].mult` with the monopole, quadrupole and
+hexadecapole `ξ₀(r), ξ₂(r), ξ₄(r)`, computed from exact per-pair Legendre
+sums accumulated during graph construction (no μ-binning error).  In
+particular `-box` alone gives simulators the redshift-space quadrupole
+directly.  The Python wrapper exposes them as `result.xi0/xi2/xi4`.
+
 ### Jackknife errors — internal angular regions
 
 `-njk N` switches on **delete-one jackknife** error estimation for every
@@ -189,7 +199,14 @@ mode writes two extra files:
 - `<out>[.<mode>].jk` — the N delete-one realisations per bin
   (`NN/RR/xi`, `NNN/RRR/zeta`, `NNNN/RRRR/zeta[_even/_odd]/zeta_disc/zeta_conn`);
 - `<out>[.<mode>].jkerr` — the jackknife mean and error per bin,
-  `σ² = (N−1)/N Σₘ (ζₘ − ζ̄)²`.
+  `σ² = (N−1)/N Σₘ (ζₘ − ζ̄)²`;
+- `<out>[.<mode>].jkcov` — the full jackknife **covariance matrix** of the
+  mode's primary estimator (row order matching the main output; the parity
+  4PCF also writes `.jkcov_odd` for the odd channel, and the 4PCF matrices
+  are skipped above 1000 configurations — build them from the realisations
+  instead).  The stored matrix is the **raw** covariance: apply the Hartlap
+  factor `(N − n_bins − 2)/(N − 1)` when inverting, or use the Python
+  `result.jk_inverse_covariance()`, which applies it by default.
 
 For the 4PCF the disconnected term is rebuilt per realisation from the
 jackknifed internal 2PCF ξ₀ (the RSD multipoles ξ₂/ξ₄ stay at their
@@ -201,7 +218,10 @@ direction — supply `-jkgal`/`-jkran` if you really want box jackknife).
 The Python wrapper exposes the same thing via `njk=`:
 `compute_2pcf(..., njk=50).xi_jk_sigma`,
 `compute_4pcf(..., parity=True, njk=50).zeta_odd_jk_sigma`, with the raw
-realisation table in `.jk_real` for building covariance matrices.
+realisation table in `.jk_real`, `result.jk_covariance(column)` for the
+covariance of any estimator column, and
+`result.jk_inverse_covariance(column)` for the likelihood-ready
+Hartlap-corrected inverse.
 
 ## Output
 

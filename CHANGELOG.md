@@ -33,6 +33,28 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   `bintable6` fill and `-exactparity` chirality signs) and by a
   combined-vs-single-mode identity test.
 
+### Added (jackknife covariances and 2PCF multipoles)
+- **Jackknife covariance matrices**: every `-njk` mode now also writes
+  `<out>[.<mode>].jkcov` — the full delete-one covariance of the primary
+  estimator, row order matching the main output (the parity 4PCF adds
+  `.jkcov_odd`; 4PCF matrices are skipped above 1000 configurations).
+  The stored matrix is the raw covariance; the header documents the
+  Hartlap factor for inversion.  Python API: `result.jk_covariance(col)`
+  and `result.jk_inverse_covariance(col)` — the latter Hartlap-corrected
+  **by default** so the casual path is likelihood-ready — plus a
+  `hartlap_factor()` helper.  Verified against the `.jk` realisations and
+  `.jkerr` σ² in the regression tests.
+- **2PCF Legendre multipoles** `ξ₀/ξ₂/ξ₄` (`<out>[.2pcf].mult`), written
+  automatically whenever a per-pair μ exists: periodic box
+  (plane-parallel z — so `-box` alone yields the redshift-space
+  quadrupole) or survey mode with `-nmu > 1` (midpoint LOS).  Computed
+  from the exact per-pair Legendre sums the graph build already
+  accumulates for the disconnected-4PCF subtraction — no μ-binning error.
+  Python: `result.xi0/xi2/xi4`.  Regression test: single-orientation pair
+  catalogues where the multipoles are analytic (μ=1: ξ₂ = 5(ξ₀+1),
+  ξ₄ = 9(ξ₀+1); μ=0: ξ₂ = −2.5(ξ₀+1), ξ₄ = 3.375(ξ₀+1)) reproduce the
+  identities to file precision, plus a survey-mode midpoint-LOS check.
+
 ### Changed
 - **Graph-build search scratch is no longer O(N) per thread.** create_graph
   allocated a kdtree2 results buffer sized num_data+num_rand for every

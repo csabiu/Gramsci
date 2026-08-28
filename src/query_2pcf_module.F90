@@ -104,6 +104,48 @@ contains
       end do
     end do
     close(unit_num)
+
+    ! ---- Legendre multipoles (plane-parallel z in a box; midpoint LOS in
+    ! survey mode with -nmu > 1): xi_ell = (2l+1) * S_ell / RR, with S_ell
+    ! the pair Legendre sums accumulated at graph build.  Under the signed
+    ! weights S_ell is already the correlation-only part for ell > 0 (the
+    ! uniform term integrates to zero against L_ell); in analytic mode the
+    ! monopole alone needs the "-1" (see compute_2pcf_for_4pcf).
+    if (cfg%pair_mult) then
+      block
+        integer :: unit_m
+        real(kdkind) :: rr_l, x0, x2, x4
+        open(newunit=unit_m, file=trim(mode_output_file('2pcf'))//'.mult', &
+             status='unknown')
+        call write_provenance(unit_m)
+        if (cfg%periodic) then
+          write(unit_m, '(a)') '# 2PCF Legendre multipoles, plane-parallel line of sight (z axis)'
+        else
+          write(unit_m, '(a)') '# 2PCF Legendre multipoles, midpoint line of sight'
+        end if
+        write(unit_m, '(a)') '# r min, r max, xi0, xi2, xi4'
+        do l = 1, cfg%nbins
+          rr_l = sum(N3(l, 1:cfg%nmu, 3))
+          if (rr_l /= 0.0d0) then
+            if (cfg%analytic) then
+              x0 = sum(N2(l, 1:cfg%nmu, 3)) / rr_l - 1.0d0
+            else
+              x0 = sum(N2(l, 1:cfg%nmu, 3)) / rr_l
+            end if
+            x2 = 5.0d0 * sum_pair_l2(l) / rr_l
+            x4 = 9.0d0 * sum_pair_l4(l) / rr_l
+          else
+            x0 = 0.0d0
+            x2 = 0.0d0
+            x4 = 0.0d0
+          end if
+          write(unit_m, '(5(e14.7,1x))') radial_bins(l), radial_bins(l+1), &
+            x0, x2, x4
+        end do
+        close(unit_m)
+        print *, 'wrote 2PCF multipoles to ', trim(mode_output_file('2pcf'))//'.mult'
+      end block
+    end if
   end subroutine write_2pcf_results
 
   ! Write the delete-one jackknife realisations and their error summary.
@@ -112,8 +154,9 @@ contains
   ! the deleted-region factor cancels in the ratio xi = N2/N3 to the accuracy
   ! that the randoms trace the selection).
   subroutine write_2pcf_jackknife()
-    integer :: l, k, m, unit_num, unit_err
+    integer :: l, k, m, unit_num, unit_err, r
     real(kdkind) :: n2m, n3m, xi_m(cfg%njk), xi_mean, xi_sigma
+    real(kdkind) :: xi_all(cfg%nbins * cfg%nmu, max(cfg%njk, 1))
 
     if (cfg%rank /= cfg%master) return
     if (cfg%njk <= 0) return
@@ -146,10 +189,13 @@ contains
         write(unit_err, '(6(e14.7,1x))') radial_bins(l), radial_bins(l+1), &
           ((float(k)-1.)/cfg%mu_scale)-1., (float(k)/cfg%mu_scale)-1.0, &
           xi_mean, xi_sigma
+        r = (l - 1) * cfg%nmu + k
+        xi_all(r, :) = xi_m
       end do
     end do
     close(unit_num)
     close(unit_err)
+    call write_jk_covariance(trim(mode_output_file('2pcf'))//'.jkcov', xi_all)
     print *, 'wrote jackknife realisations to ', trim(mode_output_file('2pcf'))//'.jk'
   end subroutine write_2pcf_jackknife
 
