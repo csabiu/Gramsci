@@ -32,7 +32,7 @@ contains
     type(kdtree2_result), allocatable :: resultsb(:)
     ! Periodic mode: which image-query center each kept neighbor came from
     integer(int8), allocatable :: rescen(:)
-    integer :: c, ncenters, nf, sx, sy, sz, ntotal, iend_clamped
+    integer :: c, ncenters, nf, sx, sy, sz, ntotal, iend_clamped, cap0
     real(kdkind) :: centers(3, 8), shift(3)
     integer :: bin_m, jbin
     real(kdkind) :: mu2, wpair
@@ -41,8 +41,14 @@ contains
     ! The drivers call create_graph(1, 999) for the timing estimate even when
     ! fewer points exist; clamp so we never index beyond the catalogue.
     iend_clamped = min(iend, ntotal)
-    allocate(resultsb(ntotal))
-    if (cfg%periodic) allocate(rescen(ntotal))
+    ! Per-thread search scratch, sized from sampled neighbor counts and
+    ! grown on demand inside the loop -- NOT O(ntotal).  resultsb is
+    ! OpenMP-private (each thread's copy is allocated to these bounds on
+    ! entering the parallel region), so an ntotal-sized buffer costs
+    ! 16 B * N per thread: ~100 GB of scratch at N = 1e8 on 64 threads.
+    cap0 = initial_neighbor_cap(ntotal)
+    allocate(resultsb(cap0))
+    if (cfg%periodic) allocate(rescen(cap0))
     ! -exactparity takes the signed volume from positions, so the per-edge
     ! direction index is not needed at all (saves 2 B/edge).
     store_phi = cfg%four_pcf_parity .and. .not. cfg%exact_parity
@@ -97,8 +103,17 @@ contains
         nnode = 0
         do c = 1, ncenters
           call kdtree2_r_nearest(tp=active_kd_tree, qv=centers(:, c), &
-               r2=cfg%rmax*cfg%rmax, nfound=nf, nalloc=ntotal-nnode, &
+               r2=cfg%rmax*cfg%rmax, nfound=nf, nalloc=size(resultsb)-nnode, &
                results=resultsb(nnode+1:))
+          do while (nf > size(resultsb) - nnode)
+            ! Scratch too small for this center: nf is the true count even
+            ! on overflow, so grow (preserving the neighbors kept from the
+            ! earlier centers) and redo this center's query.
+            call grow_scratch(resultsb, rescen, nnode + nf + 64, nnode)
+            call kdtree2_r_nearest(tp=active_kd_tree, qv=centers(:, c), &
+                 r2=cfg%rmax*cfg%rmax, nfound=nf, nalloc=size(resultsb)-nnode, &
+                 results=resultsb(nnode+1:))
+          end do
           k = nnode
           do j = nnode + 1, nnode + nf
             if (resultsb(j)%idx == i) cycle
@@ -114,8 +129,18 @@ contains
       else
 
       call kdtree2_r_nearest_around_point(tp=active_kd_tree, idxin=i, correltime=-1, &
-           r2=cfg%rmax*cfg%rmax, nfound=nn2, nalloc=ntotal, &
+           r2=cfg%rmax*cfg%rmax, nfound=nn2, nalloc=size(resultsb), &
            results=resultsb)
+      do while (nn2 > size(resultsb))
+        ! Scratch too small for this hub: nn2 is the true count even on
+        ! overflow, so one exact re-allocation and retry suffices (the
+        ! sorted-results guarantee holds on the clean final call).
+        deallocate(resultsb)
+        allocate(resultsb(nn2 + 64))
+        call kdtree2_r_nearest_around_point(tp=active_kd_tree, idxin=i, correltime=-1, &
+             r2=cfg%rmax*cfg%rmax, nfound=nn2, nalloc=size(resultsb), &
+             results=resultsb)
+      end do
 
       if (cfg%rmin > 0.0) then
         nn1 = kdtree2_r_count_around_point(tp=active_kd_tree, idxin=i, correltime=-1, &
@@ -276,5 +301,49 @@ contains
     !$OMP END PARALLEL DO
 
   end subroutine create_graph
+
+  ! Sample hub neighbor counts to choose the initial per-thread search
+  ! scratch size.  Twice the sampled maximum plus headroom absorbs density
+  ! fluctuations and (in periodic mode) the image-center aggregation near
+  ! the box faces; any hub that still exceeds it triggers the grow-and-
+  ! retry path in create_graph, so the choice affects only performance.
+  function initial_neighbor_cap(ntotal) result(cap)
+    integer, intent(in) :: ntotal
+    integer :: cap
+    integer :: s, j, nc, nsample
+    real(kdkind) :: rv
+
+    nsample = min(200, ntotal)
+    cap = 0
+    do s = 1, nsample
+      call random_number(rv)
+      j = min(ntotal, int(rv * real(ntotal, kdkind)) + 1)
+      nc = kdtree2_r_count_around_point(tp=active_kd_tree, idxin=j, &
+           correltime=-1, r2=cfg%rmax*cfg%rmax)
+      cap = max(cap, nc)
+    end do
+    cap = min(ntotal, 2 * cap + 64)
+  end function initial_neighbor_cap
+
+  ! Grow the per-thread search scratch to newcap entries, preserving the
+  ! first nkeep (the filtered neighbors kept from earlier image centers).
+  ! rescen is grown in lockstep so the two arrays never disagree in size;
+  ! it is unallocated in non-periodic mode and then left untouched.
+  subroutine grow_scratch(res, cen, newcap, nkeep)
+    type(kdtree2_result), allocatable, intent(inout) :: res(:)
+    integer(int8), allocatable, intent(inout) :: cen(:)
+    integer, intent(in) :: newcap, nkeep
+    type(kdtree2_result), allocatable :: rtmp(:)
+    integer(int8), allocatable :: ctmp(:)
+
+    allocate(rtmp(newcap))
+    rtmp(1:nkeep) = res(1:nkeep)
+    call move_alloc(rtmp, res)
+    if (allocated(cen)) then
+      allocate(ctmp(newcap))
+      ctmp(1:nkeep) = cen(1:nkeep)
+      call move_alloc(ctmp, cen)
+    end if
+  end subroutine grow_scratch
 
 end module graph_module

@@ -33,7 +33,32 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   `bintable6` fill and `-exactparity` chirality signs) and by a
   combined-vs-single-mode identity test.
 
+### Changed
+- **Graph-build search scratch is no longer O(N) per thread.** create_graph
+  allocated a kdtree2 results buffer sized num_data+num_rand for every
+  OpenMP thread (~16 B x N x threads of address space; at N = 1e8 on 64
+  threads that is ~100 GB of allocation, which fails outright on systems
+  with strict memory accounting). The per-thread scratch is now sized from
+  sampled neighbor counts and grown on demand; the search's true nfound is
+  used for an exact re-allocation and retry on the rare overflow. Outputs
+  verified identical on a 2M-point catalogue.
+
 ### Fixed
+- **Segfault at multi-million-point catalogues** (silent, no backtrace,
+  inside the KD-tree build): `-Ofast` implies `-fstack-arrays`, and the
+  vector-subscript gather `sum(the_data(c, ind(l:u)))` in
+  build_tree_for_range materialized an O(N) temporary on the default 8 MB
+  stack at the tree root. The average is now an explicit loop (no
+  temporary) and the gfortran builds additionally compile with
+  `-fno-stack-arrays` (measured perf-neutral) so no future O(N) temporary
+  can crash. A 4M-point catalogue that segfaulted now runs; regression
+  test runs the KD-tree build under a 1 MB stack limit (verified to kill
+  the pre-fix binary).
+- kdtree2's fixed-ball searches called `kdtree2_sort_results(nfound, ...)`
+  after an overflow, heapsorting `nfound > nalloc` elements past the end
+  of the results array; the sort is now capped at `nalloc` so callers can
+  safely detect overflow (`nfound > nalloc`) and retry with more storage
+  (the grow-on-demand scratch above relies on this).
 - **Periodic-box parity was silently corrupted on the default direction
   grid**: the periodic graph pass stored the direction-pixel index through
   an `int8` conversion (`graph_module.F90`), but pixel indices reach

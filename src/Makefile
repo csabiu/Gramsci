@@ -9,7 +9,10 @@ FLAGSALWAYS = -DDOUBLE -ffree-line-length-none
 #FLAGSDEBUG= -g -fbounds-check -O0
 
 #F90=gfortran -DGFORTRAN -fopenmp -Ofast -ffast-math -faggressive-loop-optimizations -ftree-loop-if-convert
-F90=gfortran -DGFORTRAN -fopenmp -Ofast -ffast-math -march=native -faggressive-loop-optimizations -ftree-loop-if-convert
+# -fno-stack-arrays: -Ofast implies -fstack-arrays, which puts array
+# temporaries on the (default 8 MB) stack -- an O(N) temporary anywhere
+# then segfaults at multi-million-point catalogues.  Measured perf-neutral.
+F90=gfortran -DGFORTRAN -fopenmp -Ofast -ffast-math -fno-stack-arrays -march=native -faggressive-loop-optimizations -ftree-loop-if-convert
 
 # macOS SDK path for linker (fixes -lSystem not found)
 SDKPATH=$(shell xcrun --show-sdk-path 2>/dev/null)

@@ -23,7 +23,8 @@ F90 = gfortran
 # M1/M2/M3/M4 and Intel Macs without sacrificing tuning where it is supported.
 MARCH := $(shell printf 'program t\nend\n' | $(F90) -march=native -x f95 -fsyntax-only - >/dev/null 2>&1 && echo -march=native)
 
-FFLAGS = -DGFORTRAN -DDOUBLE -fopenmp -Ofast -ffast-math $(MARCH) \
+# -fno-stack-arrays: see src/Makefile (O(N) stack temporaries under -Ofast)
+FFLAGS = -DGFORTRAN -DDOUBLE -fopenmp -Ofast -ffast-math -fno-stack-arrays $(MARCH) \
          -faggressive-loop-optimizations -ftree-loop-if-convert -ffree-line-length-none
 
 # ---- Platform-specific OpenCL linkage ----

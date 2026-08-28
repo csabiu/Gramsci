@@ -813,8 +813,18 @@ end subroutine build_tree
             ! actual arithmetic average. 
             !
             if (.true.) then
-               ! actually compute average
-               average = sum(tp%the_data(c,tp%ind(l:u))) / real(u-l+1,kdkind)
+               ! actually compute average.  Explicit loop, NOT
+               ! sum(the_data(c,ind(l:u))): the vector-subscript gather
+               ! materializes an O(u-l) temporary, which -Ofast's
+               ! -fstack-arrays places on the stack -- at the tree root
+               ! that is N*8 bytes, overflowing the default 8 MB stack for
+               ! catalogues of a few million points (segfault inside
+               ! kdtree2_create with no backtrace).
+               average = 0.0_kdkind
+               do i = l, u
+                  average = average + tp%the_data(c, tp%ind(i))
+               end do
+               average = average / real(u-l+1,kdkind)
             else
                average = (res%box(c)%upper + res%box(c)%lower)/2.0
             endif
@@ -1189,7 +1199,10 @@ include 'mpif.h'
     call search(tp%root)
     nfound = sr%nfound
     if (tp%sort) then
-       call kdtree2_sort_results(nfound, results)
+       ! Only nalloc entries were stored on overflow; sorting nfound of
+       ! them would run heapsort past the end of results(:).  The caller
+       ! sees nfound > nalloc and can re-allocate and retry.
+       call kdtree2_sort_results(min(nfound, nalloc), results)
     endif
 
     if (sr%overflow) then
@@ -1255,7 +1268,8 @@ include 'mpif.h'
     call search(tp%root)
     nfound = sr%nfound
     if (tp%sort) then
-       call kdtree2_sort_results(nfound,results)
+       ! min(): see kdtree2_r_nearest — only nalloc entries exist on overflow
+       call kdtree2_sort_results(min(nfound, nalloc),results)
     endif
 
     if (sr%overflow) then

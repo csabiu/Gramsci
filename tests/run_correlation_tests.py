@@ -245,6 +245,51 @@ def test_empty_bins_finite(bindir):
     print("  Test PASSED")
 
 
+def test_stack_scaling(bindir):
+    """The KD-tree build must not allocate O(N) temporaries on the stack.
+
+    -Ofast implies -fstack-arrays, and a vector-subscript gather in
+    build_tree_for_range (sum over the_data(c, ind(l:u))) then placed an
+    N*8-byte temporary on the stack at the tree root -- a silent segfault
+    for multi-million-point catalogues on the default 8 MB stack.  Rather
+    than shipping a huge catalogue, shrink the stack: with 400k points a
+    1 MB limit reproduces the failure mode (verified: the pre-fix binary
+    segfaults); the fixed code (explicit loop + -fno-stack-arrays) runs
+    fine even at 256 KB.
+    """
+    print('\n=== Test: KD-tree build under a 1 MB stack (no O(N) temporaries) ===')
+
+    import resource
+
+    rng = np.random.default_rng(SEED)
+    gal_file = 'tmp_stack.gal'
+    ran_file = 'tmp_stack.ran'
+    out = 'tmp_stack.out'
+    gramsci = os.path.join(bindir, 'gramsci')
+
+    np.savetxt(gal_file, rng.random((200_000, 3)) * 1000.0, fmt='%.6e')
+    np.savetxt(ran_file, rng.random((200_000, 3)) * 1000.0, fmt='%.6e')
+
+    def limit_stack():
+        soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+        resource.setrlimit(resource.RLIMIT_STACK, (1024 * 1024, hard))
+
+    cmd = (f"{gramsci} -gal {gal_file} -ran {ran_file} "
+           f"-rmin 1 -rmax 5 -nbins 3 -nmu 1 -out {out} -2pcf")
+    print(cmd + '   (RLIMIT_STACK = 1 MB)')
+    r = subprocess.run(cmd, shell=True, preexec_fn=limit_stack,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, (
+        f'gramsci died under a 1 MB stack (exit {r.returncode}) -- '
+        f'O(N) stack temporary in the KD-tree build?')
+    data = np.loadtxt(out, comments='#', ndmin=2)
+    assert data.shape[0] == 3 and np.all(np.isfinite(data)), 'bad output'
+    print("  KD-tree build survived the reduced stack")
+
+    _cleanup(gal_file, ran_file, out)
+    print("  Test PASSED")
+
+
 def test_periodic_parity(bindir):
     """Periodic-box parity must match the non-periodic path exactly.
 
@@ -680,6 +725,7 @@ def main():
     test_regular_tetra_connected(bindir)
     test_chiral_parity(bindir)
     test_empty_bins_finite(bindir)
+    test_stack_scaling(bindir)
     test_periodic_parity(bindir)
     test_analytic_randoms(bindir)
     test_combined_modes(bindir)
