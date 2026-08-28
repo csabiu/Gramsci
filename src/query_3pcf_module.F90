@@ -27,14 +27,12 @@ contains
     !$OMP PARALLEL DO schedule(dynamic) &
     !$OMP& private(i, k1, nn2, id1, nn_id1, a, b, ind1, ind2, ind3, bin, wi_w1) &
     !$OMP& private(id3, jr1, jr2, jr3, w3, wprod) &
-    !$OMP& shared(weights, output, buffer, cfg, bintable, region) &
+    !$OMP& shared(weights, output, cfg, bintable, region) &
     !$OMP& reduction(+:N2) &
     !$OMP& reduction(+:N3) &
     !$OMP& reduction(+:N2jk) &
     !$OMP& reduction(+:N3jk)
     do i = istart, iend
-      if (buffer(i) == 1) cycle
-
       nn2 = output(i)%nn
 
       do k1 = 1, nn2
@@ -148,12 +146,10 @@ contains
 
     !$OMP PARALLEL DO schedule(dynamic) &
     !$OMP& private(i, k1, k2, nn2, id1, id2, ind1, ind2, ind3, bin, wi_w1) &
-    !$OMP& shared(weights, output, buffer, cfg, bintable) &
+    !$OMP& shared(weights, output, cfg, bintable) &
     !$OMP& reduction(+:N2) &
     !$OMP& reduction(+:N3)
     do i = istart, iend
-      if (buffer(i) == 1) cycle
-
       nn2 = output(i)%nn
 
       do k1 = 1, nn2
@@ -203,12 +199,10 @@ contains
     !$OMP PARALLEL DO schedule(dynamic) &
     !$OMP& private(i, k1, k2, nn2, id1, id2, ind1, ind2, ind3) &
     !$OMP& private(jr1, jr2, jr3, wprod) &
-    !$OMP& shared(weights, output, buffer, cfg, region) &
+    !$OMP& shared(weights, output, cfg, region) &
     !$OMP& reduction(+:N2, N3) &
     !$OMP& reduction(+:N2jk, N3jk)
     do i = istart, iend
-      if (buffer(i) == 1) cycle
-
       nn2 = output(i)%nn
 
       do k1 = 1, nn2

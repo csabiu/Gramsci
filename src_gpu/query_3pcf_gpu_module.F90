@@ -131,13 +131,12 @@ contains
       ! Single-pass path: whole CSR fits on the device.
       ! =====================================================================
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, buffer, bintable, region) &
+      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, bintable, region) &
       !$ACC& COPY(part_nnn, part_rrr, part_nnn_jk, part_rrr_jk)
 
       !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(128) &
       !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1, jslot, jr1)
       do i = istart, iend
-        if (buffer(i) == 1) cycle
 
         nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
         if (nn_i < 2) cycle
@@ -225,7 +224,7 @@ contains
       allocate(stage_id(maxw), stage_dist(maxw))
 
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, weights, buffer, bintable, region) &
+      !$ACC& COPYIN(csr_ptr, weights, bintable, region) &
       !$ACC& COPY(part_nnn, part_rrr, part_nnn_jk, part_rrr_jk)
 
       do cw = 1, nwin
@@ -250,7 +249,6 @@ contains
           !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(128) &
           !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1, jslot, jr1)
           do i = hublo, hubhi
-            if (buffer(i) == 1) cycle
 
             nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
             if (nn_i < 2) cycle
@@ -415,13 +413,12 @@ contains
       ! Single-pass path: whole CSR fits on the device.
       ! =====================================================================
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, buffer) &
+      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights) &
       !$ACC& COPY(part_nnn, part_rrr, part_nnn_jk, part_rrr_jk)
 
       !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(128) &
       !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1)
       do i = istart, iend
-        if (buffer(i) == 1) cycle
 
         nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
         if (nn_i < 2) cycle
@@ -507,7 +504,7 @@ contains
       allocate(stage_id(maxw), stage_dist(maxw))
 
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, weights, buffer) &
+      !$ACC& COPYIN(csr_ptr, weights) &
       !$ACC& COPY(part_nnn, part_rrr, part_nnn_jk, part_rrr_jk)
 
       do cw = 1, nwin
@@ -530,7 +527,6 @@ contains
           !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(128) &
           !$ACC& PRIVATE(i, k1, nn_i, id1, base_i, slot, ind1, wi_w1, jslot, jr1)
           do i = hublo, hubhi
-            if (buffer(i) == 1) cycle
 
             nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
             if (nn_i < 2) cycle

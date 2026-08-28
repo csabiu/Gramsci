@@ -141,7 +141,7 @@ contains
       ! Single-pass path: whole CSR + lmat scratch fits on the device.
       ! =====================================================================
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, buffer, bintable6) &
+      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, bintable6) &
       !$ACC& CREATE(lmat_g) COPY(part_n4, part_r4)
 
       ! One gang per ig slot; hubs dealt round-robin so gang loads even out.
@@ -153,7 +153,6 @@ contains
       !$ACC&         ind1, ind2, ind4, w12, rand12)
       do ig = 1, ngang
         do i = istart + ig - 1, iend, ngang
-          if (buffer(i) == 1) cycle
           nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
           if (nn_i <= 2) cycle
 
@@ -240,7 +239,7 @@ contains
       allocate(stage2_id(maxw), stage2_dist(maxw))
 
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, weights, buffer, bintable6) &
+      !$ACC& COPYIN(csr_ptr, weights, bintable6) &
       !$ACC& CREATE(lmat_g) COPY(part_n4, part_r4)
 
       do cw1 = 1, nwin
@@ -280,7 +279,6 @@ contains
             !$ACC&         ind1, ind2, ind4, w12, rand12)
             do ig = 1, ngang
               do i = hublo + ig - 1, hubhi, ngang
-                if (buffer(i) == 1) cycle
                 nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
                 if (nn_i <= 2) cycle
 
@@ -485,7 +483,7 @@ contains
       ! Single-pass path
       ! =====================================================================
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, csr_phi, weights, buffer, &
+      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, csr_phi, weights, &
       !$ACC&        bintable6, dir_x, dir_y, dir_z, px, py, pz) &
       !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4)
 
@@ -495,7 +493,6 @@ contains
       !$ACC&         u1x, u1y, u1z, u2x, u2y, u2z, rn1)
       do ig = 1, ngang
         do i = istart + ig - 1, iend, ngang
-          if (buffer(i) == 1) cycle
           nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
           if (nn_i <= 2) cycle
 
@@ -631,7 +628,7 @@ contains
       allocate(stage2_id(maxw), stage2_dist(maxw))
 
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, weights, buffer, bintable6, dir_x, dir_y, dir_z, &
+      !$ACC& COPYIN(csr_ptr, weights, bintable6, dir_x, dir_y, dir_z, &
       !$ACC&        px, py, pz) &
       !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4)
 
@@ -682,7 +679,6 @@ contains
             !$ACC&         u1x, u1y, u1z, u2x, u2y, u2z, rn1)
             do ig = 1, ngang
               do i = hublo + ig - 1, hubhi, ngang
-                if (buffer(i) == 1) cycle
                 nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
                 if (nn_i <= 2) cycle
 

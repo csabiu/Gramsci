@@ -58,7 +58,7 @@ contains
     integer(int64) :: ngang, n_hubs, ncol
     real(real32), allocatable :: wf(:), hn(:), hr(:), hc(:)
     real(real64), allocatable :: hacc(:,:)
-    integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_w, b_buf, b_bt3, b_pn, b_pr, kern
+    integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_w, b_bt3, b_pn, b_pr, kern
     integer(c_intptr_t) :: b_pnc, b_prc
     real(kdkind) :: acc
 
@@ -88,7 +88,6 @@ contains
     b_id   = cl_buf_in_i32(csr_id,   csr_total_edges)
     b_dist = cl_buf_in_i8 (csr_dist, csr_total_edges)
     b_w    = cl_buf_in_f32(wf,       n_hubs)
-    b_buf  = cl_buf_in_i32(buffer,   n_hubs)
     ! bintable(:,:,:,1) is stored column-major == the kernel's flatten index,
     ! so its first nbins^3 elements ARE the lookup table -> upload directly.
     b_bt3  = cl_buf_in_i32(bintable,  int(nb,int64)**3)
@@ -103,19 +102,18 @@ contains
     call cl_arg_mem(kern, 1, b_id)
     call cl_arg_mem(kern, 2, b_dist)
     call cl_arg_mem(kern, 3, b_w)
-    call cl_arg_mem(kern, 4, b_buf)
-    call cl_arg_mem(kern, 5, b_bt3)
-    call cl_arg_mem(kern, 6, b_pn)
-    call cl_arg_mem(kern, 7, b_pr)
-    call cl_arg_i32(kern, 8,  nb)
-    call cl_arg_i32(kern, 9,  cb)
-    call cl_arg_i32(kern, 10, cfg%num_data)
-    call cl_arg_i32(kern, 11, istart)
-    call cl_arg_i32(kern, 12, iend)
-    call cl_arg_i32(kern, 13, int(ngang, int32))
-    call cl_arg_mem(kern, 18, b_pnc)
-    call cl_arg_mem(kern, 19, b_prc)
-    if (cl_run_complete(kern, 14, 15, 16, 17, ngang)) then
+    call cl_arg_mem(kern, 4, b_bt3)
+    call cl_arg_mem(kern, 5, b_pn)
+    call cl_arg_mem(kern, 6, b_pr)
+    call cl_arg_i32(kern, 7,  nb)
+    call cl_arg_i32(kern, 8,  cb)
+    call cl_arg_i32(kern, 9, cfg%num_data)
+    call cl_arg_i32(kern, 10, istart)
+    call cl_arg_i32(kern, 11, iend)
+    call cl_arg_i32(kern, 12, int(ngang, int32))
+    call cl_arg_mem(kern, 17, b_pnc)
+    call cl_arg_mem(kern, 18, b_prc)
+    if (cl_run_complete(kern, 13, 14, 15, 16, ngang)) then
       ! ---- Read back sums and Kahan compensations; true total = sum - comp ----
       call cl_read_f32(b_pn, hn, ncol)
       call cl_read_f32(b_pr, hr, ncol)
@@ -131,7 +129,7 @@ contains
       call cl_write_f32(b_pr, hr, ncol)
       call cl_write_f32(b_pnc, hc, ncol)
       call cl_write_f32(b_prc, hc, ncol)
-      call cl_run_bucketed(kern, 14, 15, 16, 17, ngang, n_hubs, &
+      call cl_run_bucketed(kern, 13, 14, 15, 16, ngang, n_hubs, &
                            [b_pn, b_pnc, b_pr, b_prc], hacc)
     end if
 
@@ -150,7 +148,7 @@ contains
     end do
 
     call cl_release(b_ptr);  call cl_release(b_id);  call cl_release(b_dist)
-    call cl_release(b_w);    call cl_release(b_buf); call cl_release(b_bt3)
+    call cl_release(b_w);    call cl_release(b_bt3)
     call cl_release(b_pn);   call cl_release(b_pr)
     call cl_release(b_pnc);  call cl_release(b_prc); call cl_release_kernel(kern)
     deallocate(wf, hn, hr, hc, hacc)
@@ -164,7 +162,7 @@ contains
     integer(int64) :: ngang, n_hubs, ncol
     real(real32), allocatable :: wf(:), hn(:), hr(:), hc(:)
     real(real64), allocatable :: hacc(:,:)
-    integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_w, b_buf, b_pn, b_pr, kern
+    integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_w, b_pn, b_pr, kern
     integer(c_intptr_t) :: b_pnc, b_prc
     real(kdkind) :: acc
 
@@ -192,7 +190,6 @@ contains
     b_id   = cl_buf_in_i32(csr_id,   csr_total_edges)
     b_dist = cl_buf_in_i8 (csr_dist, csr_total_edges)
     b_w    = cl_buf_in_f32(wf,       n_hubs)
-    b_buf  = cl_buf_in_i32(buffer,   n_hubs)
     b_pn   = cl_buf_zeroed_f32(hn,   ncol)
     b_pr   = cl_buf_zeroed_f32(hr,   ncol)
     b_pnc  = cl_buf_zeroed_f32(hc,   ncol)   ! Kahan compensation of b_pn
@@ -203,18 +200,17 @@ contains
     call cl_arg_mem(kern, 1, b_id)
     call cl_arg_mem(kern, 2, b_dist)
     call cl_arg_mem(kern, 3, b_w)
-    call cl_arg_mem(kern, 4, b_buf)
-    call cl_arg_mem(kern, 5, b_pn)
-    call cl_arg_mem(kern, 6, b_pr)
+    call cl_arg_mem(kern, 4, b_pn)
+    call cl_arg_mem(kern, 5, b_pr)
+    call cl_arg_i32(kern, 6,  nb)
     call cl_arg_i32(kern, 7,  nb)
-    call cl_arg_i32(kern, 8,  nb)
-    call cl_arg_i32(kern, 9,  cfg%num_data)
-    call cl_arg_i32(kern, 10, istart)
-    call cl_arg_i32(kern, 11, iend)
-    call cl_arg_i32(kern, 12, int(ngang, int32))
-    call cl_arg_mem(kern, 17, b_pnc)
-    call cl_arg_mem(kern, 18, b_prc)
-    if (cl_run_complete(kern, 13, 14, 15, 16, ngang)) then
+    call cl_arg_i32(kern, 8,  cfg%num_data)
+    call cl_arg_i32(kern, 9, istart)
+    call cl_arg_i32(kern, 10, iend)
+    call cl_arg_i32(kern, 11, int(ngang, int32))
+    call cl_arg_mem(kern, 16, b_pnc)
+    call cl_arg_mem(kern, 17, b_prc)
+    if (cl_run_complete(kern, 12, 13, 14, 15, ngang)) then
       call cl_read_f32(b_pn, hn, ncol)
       call cl_read_f32(b_pr, hr, ncol)
       hacc(:, 1) = real(hn, real64)
@@ -229,7 +225,7 @@ contains
       call cl_write_f32(b_pr, hr, ncol)
       call cl_write_f32(b_pnc, hc, ncol)
       call cl_write_f32(b_prc, hc, ncol)
-      call cl_run_bucketed(kern, 13, 14, 15, 16, ngang, n_hubs, &
+      call cl_run_bucketed(kern, 12, 13, 14, 15, ngang, n_hubs, &
                            [b_pn, b_pnc, b_pr, b_prc], hacc)
     end if
 
@@ -247,7 +243,7 @@ contains
     end do
 
     call cl_release(b_ptr);  call cl_release(b_id);  call cl_release(b_dist)
-    call cl_release(b_w);    call cl_release(b_buf)
+    call cl_release(b_w)
     call cl_release(b_pn);   call cl_release(b_pr)
     call cl_release(b_pnc);  call cl_release(b_prc); call cl_release_kernel(kern)
     deallocate(wf, hn, hr, hc, hacc)

@@ -43,6 +43,19 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   used for an exact re-allocation and retry on the rare overflow. Outputs
   verified identical on a 2M-point catalogue.
 
+### Removed
+- **Dead code left over from the 2.3.0 MPI/domain-decomposition removal**:
+  the `buffer` halo-flag array (allocated, zeroed and checked at the top of
+  every hot query loop on every backend -- CPU, OpenACC and OpenCL kernels
+  alike -- but never set to anything but 0) and the never-read
+  `loadran`/`saveran`/`ranfile` config fields. The OpenCL kernels lose
+  their `buffer` argument, so every kernel argument index after it shifts
+  down by one (wrappers renumbered; embedded kernel module regenerated).
+  Verified: full CPU suite, CPU-vs-OpenCL agreement at file precision, and
+  `src_opencl/validate.sh` on an Apple M1 -- 2PCF/3PCF/equi/4PCF pass
+  identically to the pre-change baseline (the 4PCFp mismatch it reports is
+  a pre-existing OpenCL bug, present at baseline, fixed separately).
+
 ### Fixed
 - **Segfault at multi-million-point catalogues** (silent, no backtrace,
   inside the KD-tree build): `-Ofast` implies `-fstack-arrays`, and the

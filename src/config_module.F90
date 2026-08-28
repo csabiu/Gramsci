@@ -41,8 +41,6 @@ module config_module
     integer :: n_theta_dir = 8
     integer :: n_phi_dir = 32
     integer :: n_dir_pixels = 256   ! = n_theta_dir * n_phi_dir
-    logical :: loadran = .false.
-    logical :: saveran = .false.
     ! Periodic-box mode (-box): minimum-image separations; if no random
     ! catalogue is given, RR/RRR/RRRR are computed analytically.
     logical :: periodic = .false.
@@ -62,7 +60,7 @@ module config_module
     ! In a periodic box the line of sight is plane-parallel (z axis); in
     ! survey mode it is the pair midpoint direction (requires -nmu > 1).
     logical :: disc_rsd = .false.
-    character(len=2000) :: file1 = '', file2 = '', ranfile = ''
+    character(len=2000) :: file1 = '', file2 = ''
     character(len=2000) :: output_file = 'result.txt'
     ! Which build is running ('cpu' | 'openacc' | 'opencl'); set by the
     ! driver before parseOptions, reported by -version and the file headers
@@ -93,7 +91,6 @@ module config_module
   type(node), dimension(:), allocatable :: output
   real(kdkind), dimension(:,:), allocatable :: points
   real(kdkind), allocatable :: weights(:), radial_bins(:)
-  integer, allocatable :: buffer(:)
   real(kdkind), allocatable :: N2(:,:,:), N3(:,:,:)
   ! Per-region sums of triplets TOUCHING each region (not the realisations
   ! themselves); the realisations are formed by subtraction at write time.
@@ -136,8 +133,6 @@ contains
     cfg%output_file = 'result.txt'
     cfg%RSD = .false.
     cfg%nmu = 1
-    cfg%loadran = .false.
-    cfg%saveran = .false.
     cfg%rancat = .false.
     cfg%three_pcf_eq = .false.
     cfg%three_pcf = .false.

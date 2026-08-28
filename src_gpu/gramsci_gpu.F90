@@ -43,7 +43,6 @@ program Ngramsci_gpu
   ! ---- Allocate data arrays ----
   allocate(points(cfg%d, cfg%num_data + cfg%num_rand))
   allocate(weights(cfg%num_data + cfg%num_rand))
-  allocate(buffer(cfg%num_data + cfg%num_rand))
   allocate(radial_bins(cfg%nbins + 1))
 
   ! ---- Define radial bins ----
@@ -284,7 +283,6 @@ program Ngramsci_gpu
   if (cfg%rank == 0) print *, 'finished querying the graph'
 
   call deallocate_arrays()
-  deallocate(buffer)
 
   print *, "Exit... stage left!"
 

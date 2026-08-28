@@ -19,12 +19,10 @@ contains
 
     !$OMP PARALLEL DO schedule(dynamic) private(i, k1, nn2, id1, ind1, mu) &
     !$OMP& private(jr1, jr2, wpair) &
-    !$OMP& shared(weights, output, buffer, cfg, region) &
+    !$OMP& shared(weights, output, cfg, region) &
     !$OMP& reduction(+:N2, N3) &
     !$OMP& reduction(+:N2jk, N3jk)
     do i = istart, iend
-      if (buffer(i) == 1) cycle
-
       nn2 = output(i)%nn
 
       do k1 = 1, nn2

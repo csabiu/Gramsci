@@ -68,7 +68,7 @@ contains
     !$OMP&         nn1, nn2, nnode, resultsb, rescen, theta, mu1_local, &
     !$OMP&         dx, dy, dz, theta_sph, phi_sph, i_theta, i_phi, &
     !$OMP&         c, ncenters, nf, sx, sy, sz, centers, shift, bin_m, jbin, mu2, wpair) &
-    !$OMP& shared(active_kd_tree, output, points, weights, buffer, cfg, store_phi, &
+    !$OMP& shared(active_kd_tree, output, points, weights, cfg, store_phi, &
     !$OMP&        ntotal, iend_clamped) &
     !$OMP& reduction(+: sum_pair_l2, sum_pair_l4)
     do i = istart, iend_clamped
@@ -184,7 +184,7 @@ contains
           output(i)%dist(k) = int(min(cfg%nbins, max(1, j)), int8)
           output(i)%id(k) = resultsb(k)%idx
 
-          if (cfg%disc_rsd .and. buffer(i) /= 1) then
+          if (cfg%disc_rsd) then
             ! Plane-parallel line of sight (z axis): mu of the min-image pair.
             dz = points(3, resultsb(k)%idx) - centers(3, rescen(k))
             mu2 = dz * dz / resultsb(k)%dis
@@ -257,7 +257,7 @@ contains
 
         ! Survey mode: disc_rsd implies cfg%RSD, so theta (the midpoint-LOS
         ! pair mu) was computed above.
-        if (cfg%disc_rsd .and. buffer(i) /= 1) then
+        if (cfg%disc_rsd) then
           mu2 = theta * theta
           wpair = weights(i) * weights(resultsb(j)%idx)
           bin_m = int(output(i)%dist(k))

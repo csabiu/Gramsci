@@ -147,7 +147,6 @@ contains
       i = i + 1
       points(1:3, i0 + i - 1) = v4(1:3)
       weights(i0 + i - 1) = v4(4)
-      buffer(i0 + i - 1) = 0
     end do
     close(unit_num)
   end subroutine read_catalog

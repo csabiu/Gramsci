@@ -92,7 +92,7 @@ contains
     integer(int64) :: ngang, n_hubs, ncol
     real(real32), allocatable :: wf(:), hn(:), hr(:), hc(:)
     real(real64), allocatable :: hacc(:,:)
-    integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_w, b_buf, b_bt6, b_n4, b_r4, kern
+    integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_w, b_bt6, b_n4, b_r4, kern
     integer(c_intptr_t) :: b_n4c, b_r4c
     real(kdkind) :: acc
 
@@ -119,7 +119,6 @@ contains
     b_id   = cl_buf_in_i32(csr_id,   csr_total_edges)
     b_dist = cl_buf_in_i8 (csr_dist, csr_total_edges)
     b_w    = cl_buf_in_f32(wf,       n_hubs)
-    b_buf  = cl_buf_in_i32(buffer,   n_hubs)
     b_bt6  = cl_buf_in_i32(bintable6, int(nb,int64)**6)   ! column-major == kernel flatten
     b_n4   = cl_buf_zeroed_f32(hn, ncol)
     b_r4   = cl_buf_zeroed_f32(hr, ncol)
@@ -131,19 +130,18 @@ contains
     call cl_arg_mem(kern, 1, b_id)
     call cl_arg_mem(kern, 2, b_dist)
     call cl_arg_mem(kern, 3, b_w)
-    call cl_arg_mem(kern, 4, b_buf)
-    call cl_arg_mem(kern, 5, b_bt6)
-    call cl_arg_mem(kern, 6, b_n4)
-    call cl_arg_mem(kern, 7, b_r4)
-    call cl_arg_i32(kern, 8,  nb)
-    call cl_arg_i32(kern, 9,  ncfg)
-    call cl_arg_i32(kern, 10, cfg%num_data)
-    call cl_arg_i32(kern, 11, istart)
-    call cl_arg_i32(kern, 12, iend)
-    call cl_arg_i32(kern, 13, int(ngang, int32))
-    call cl_arg_mem(kern, 18, b_n4c)
-    call cl_arg_mem(kern, 19, b_r4c)
-    if (cl_run_complete(kern, 14, 15, 16, 17, ngang)) then
+    call cl_arg_mem(kern, 4, b_bt6)
+    call cl_arg_mem(kern, 5, b_n4)
+    call cl_arg_mem(kern, 6, b_r4)
+    call cl_arg_i32(kern, 7,  nb)
+    call cl_arg_i32(kern, 8,  ncfg)
+    call cl_arg_i32(kern, 9, cfg%num_data)
+    call cl_arg_i32(kern, 10, istart)
+    call cl_arg_i32(kern, 11, iend)
+    call cl_arg_i32(kern, 12, int(ngang, int32))
+    call cl_arg_mem(kern, 17, b_n4c)
+    call cl_arg_mem(kern, 18, b_r4c)
+    if (cl_run_complete(kern, 13, 14, 15, 16, ngang)) then
       call cl_read_f32(b_n4, hn, ncol)
       call cl_read_f32(b_r4, hr, ncol)
       hacc(:, 1) = real(hn, real64)
@@ -158,7 +156,7 @@ contains
       call cl_write_f32(b_r4, hr, ncol)
       call cl_write_f32(b_n4c, hc, ncol)
       call cl_write_f32(b_r4c, hc, ncol)
-      call cl_run_bucketed(kern, 14, 15, 16, 17, ngang, n_hubs, &
+      call cl_run_bucketed(kern, 13, 14, 15, 16, ngang, n_hubs, &
                            [b_n4, b_n4c, b_r4, b_r4c], hacc)
     end if
 
@@ -176,7 +174,7 @@ contains
     end do
 
     call cl_release(b_ptr); call cl_release(b_id); call cl_release(b_dist)
-    call cl_release(b_w); call cl_release(b_buf); call cl_release(b_bt6)
+    call cl_release(b_w); call cl_release(b_bt6)
     call cl_release(b_n4); call cl_release(b_r4)
     call cl_release(b_n4c); call cl_release(b_r4c)
     call cl_release_kernel(kern)
@@ -197,7 +195,7 @@ contains
     real(real64), allocatable :: hacc(:,:)
     integer(int8), allocatable :: signv(:)
     real(kdkind) :: vol, acc
-    integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_phi, b_w, b_buf, b_bt6, b_sgn
+    integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_phi, b_w, b_bt6, b_sgn
     integer(c_intptr_t) :: b_ne, b_no, b_re, b_ro, kern
     integer(c_intptr_t) :: b_nec, b_noc, b_rec, b_roc
 
@@ -246,7 +244,6 @@ contains
     b_dist = cl_buf_in_i8 (csr_dist, csr_total_edges)
     b_phi  = cl_buf_in_i8 (csr_phi,  csr_total_edges)
     b_w    = cl_buf_in_f32(wf,       n_hubs)
-    b_buf  = cl_buf_in_i32(buffer,   n_hubs)
     b_bt6  = cl_buf_in_i32(bintable6, int(nb,int64)**6)
     b_sgn  = cl_buf_in_i8 (signv,    int(ndir,int64)**3)
     b_ne   = cl_buf_zeroed_f32(hne, ncol)
@@ -264,25 +261,24 @@ contains
     call cl_arg_mem(kern, 2, b_dist)
     call cl_arg_mem(kern, 3, b_phi)
     call cl_arg_mem(kern, 4, b_w)
-    call cl_arg_mem(kern, 5, b_buf)
-    call cl_arg_mem(kern, 6, b_bt6)
-    call cl_arg_mem(kern, 7, b_sgn)
-    call cl_arg_mem(kern, 8,  b_ne)
-    call cl_arg_mem(kern, 9,  b_no)
-    call cl_arg_mem(kern, 10, b_re)
-    call cl_arg_mem(kern, 11, b_ro)
-    call cl_arg_i32(kern, 12, nb)
-    call cl_arg_i32(kern, 13, ncfg)
-    call cl_arg_i32(kern, 14, cfg%num_data)
-    call cl_arg_i32(kern, 15, ndir)
-    call cl_arg_i32(kern, 16, istart)
-    call cl_arg_i32(kern, 17, iend)
-    call cl_arg_i32(kern, 18, int(ngang, int32))
-    call cl_arg_mem(kern, 23, b_nec)
-    call cl_arg_mem(kern, 24, b_noc)
-    call cl_arg_mem(kern, 25, b_rec)
-    call cl_arg_mem(kern, 26, b_roc)
-    if (cl_run_complete(kern, 19, 20, 21, 22, ngang)) then
+    call cl_arg_mem(kern, 5, b_bt6)
+    call cl_arg_mem(kern, 6, b_sgn)
+    call cl_arg_mem(kern, 7,  b_ne)
+    call cl_arg_mem(kern, 8,  b_no)
+    call cl_arg_mem(kern, 9, b_re)
+    call cl_arg_mem(kern, 10, b_ro)
+    call cl_arg_i32(kern, 11, nb)
+    call cl_arg_i32(kern, 12, ncfg)
+    call cl_arg_i32(kern, 13, cfg%num_data)
+    call cl_arg_i32(kern, 14, ndir)
+    call cl_arg_i32(kern, 15, istart)
+    call cl_arg_i32(kern, 16, iend)
+    call cl_arg_i32(kern, 17, int(ngang, int32))
+    call cl_arg_mem(kern, 22, b_nec)
+    call cl_arg_mem(kern, 23, b_noc)
+    call cl_arg_mem(kern, 24, b_rec)
+    call cl_arg_mem(kern, 25, b_roc)
+    if (cl_run_complete(kern, 18, 19, 20, 21, ngang)) then
       call cl_read_f32(b_ne, hne, ncol)
       call cl_read_f32(b_no, hno, ncol)
       call cl_read_f32(b_re, hre, ncol)
@@ -309,7 +305,7 @@ contains
       call cl_write_f32(b_noc, hc, ncol)
       call cl_write_f32(b_rec, hc, ncol)
       call cl_write_f32(b_roc, hc, ncol)
-      call cl_run_bucketed(kern, 19, 20, 21, 22, ngang, n_hubs, &
+      call cl_run_bucketed(kern, 18, 19, 20, 21, ngang, n_hubs, &
                            [b_ne, b_nec, b_no, b_noc, b_re, b_rec, b_ro, b_roc], hacc)
     end if
 
@@ -337,7 +333,7 @@ contains
     end do
 
     call cl_release(b_ptr); call cl_release(b_id); call cl_release(b_dist)
-    call cl_release(b_phi); call cl_release(b_w); call cl_release(b_buf)
+    call cl_release(b_phi); call cl_release(b_w)
     call cl_release(b_bt6); call cl_release(b_sgn)
     call cl_release(b_ne); call cl_release(b_no); call cl_release(b_re); call cl_release(b_ro)
     call cl_release(b_nec); call cl_release(b_noc); call cl_release(b_rec); call cl_release(b_roc)

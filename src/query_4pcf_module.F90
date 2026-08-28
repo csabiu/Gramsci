@@ -298,12 +298,10 @@ contains
 
     !$OMP PARALLEL DO schedule(dynamic) &
     !$OMP& private(i, k1, nn2, id1, ind1, bin_idx, jr1, jr2, wpair) &
-    !$OMP& shared(weights, output, buffer, cfg, region) &
+    !$OMP& shared(weights, output, cfg, region) &
     !$OMP& reduction(+:DD_2pcf, RR_2pcf) &
     !$OMP& reduction(+:DD_2pcf_jk, RR_2pcf_jk)
     do i = istart, iend
-      if (buffer(i) == 1) cycle
-
       nn2 = output(i)%nn
 
       do k1 = 1, nn2
@@ -432,12 +430,10 @@ contains
     !$OMP&         raw_bin, config_idx, parity_flip, sign_V, &
     !$OMP&         p1, p2, p3, w4, vol, &
     !$OMP&         u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn) &
-    !$OMP& shared(weights, output, buffer, cfg, bintable6, dir_x, dir_y, dir_z, &
+    !$OMP& shared(weights, output, cfg, bintable6, dir_x, dir_y, dir_z, &
     !$OMP&        px, py, pz, exact_g) &
     !$OMP& reduction(+:N4, R4)
     do i = istart, iend
-      if (buffer(i) == 1) cycle
-
       nn2 = output(i)%nn
       if (nn2 <= 2) cycle
 
@@ -551,11 +547,10 @@ contains
     !$OMP&         p1, p2, p3, w4, vol, sv4, &
     !$OMP&         jrs, jr, q, p, dup, isr, &
     !$OMP&         u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn) &
-    !$OMP& shared(weights, output, buffer, cfg, bintable6, dir_x, dir_y, dir_z, &
+    !$OMP& shared(weights, output, cfg, bintable6, dir_x, dir_y, dir_z, &
     !$OMP&        px, py, pz, exact_g, region, N4jk, R4jk) &
     !$OMP& reduction(+:N4, R4)
     do i = istart, iend
-      if (buffer(i) == 1) cycle
       nn2 = output(i)%nn
       if (nn2 <= 2) cycle
 
@@ -730,11 +725,9 @@ contains
     !$OMP& private(i, k1, k2, k3, nn2, id1, id2, id3, &
     !$OMP&         ind1, ind2, ind3, ind4, ind5, ind6, &
     !$OMP&         config_idx, w4) &
-    !$OMP& shared(weights, output, buffer, cfg, bintable6) &
+    !$OMP& shared(weights, output, cfg, bintable6) &
     !$OMP& reduction(+:N4, R4)
     do i = istart, iend
-      if (buffer(i) == 1) cycle
-
       nn2 = output(i)%nn
       if (nn2 <= 2) cycle
 
@@ -807,10 +800,9 @@ contains
     !$OMP&         a, b, alpha, beta, gamma, ha, hb, hc, config_idx, &
     !$OMP&         jrs, jr, q, p, dup, isr, &
     !$OMP&         ind1, ind2, ind3, ind4, ind5, ind6, w4) &
-    !$OMP& shared(weights, output, buffer, cfg, bintable6, region, N4jk, R4jk) &
+    !$OMP& shared(weights, output, cfg, bintable6, region, N4jk, R4jk) &
     !$OMP& reduction(+:N4, R4)
     do i = istart, iend
-      if (buffer(i) == 1) cycle
       nn2 = output(i)%nn
       if (nn2 <= 2) cycle
 

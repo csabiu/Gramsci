@@ -73,7 +73,6 @@ __kernel void k_3pcf_all(__global const long  *ptr,
                          __global const int   *id,
                          __global const char  *dist,
                          __global const float *w,
-                         __global const int   *buffer,
                          __global const int   *bt3,    /* nbins^3 config table */
                          __global float       *part_nnn,
                          __global float       *part_rrr,
@@ -97,7 +96,6 @@ __kernel void k_3pcf_all(__global const long  *ptr,
             int bk = (i - istart) % nbuckets;
             if (bk < blo || bk >= bhi) continue;
         }
-        if (buffer[i - 1] == 1) continue;
         long s  = ptr[i - 1];
         int  nn = (int)(ptr[i] - s);
         if (nn < 2) continue;
@@ -135,7 +133,6 @@ __kernel void k_3pcf_equi(__global const long  *ptr,
                           __global const int   *id,
                           __global const char  *dist,
                           __global const float *w,
-                          __global const int   *buffer,
                           __global float       *part_nnn,
                           __global float       *part_rrr,
                           const int nbins, const int cb,
@@ -158,7 +155,6 @@ __kernel void k_3pcf_equi(__global const long  *ptr,
             int bk = (i - istart) % nbuckets;
             if (bk < blo || bk >= bhi) continue;
         }
-        if (buffer[i - 1] == 1) continue;
         long s  = ptr[i - 1];
         int  nn = (int)(ptr[i] - s);
         if (nn < 2) continue;
@@ -207,7 +203,6 @@ __kernel void k_4pcf_all(__global const long  *ptr,
                          __global const int   *id,
                          __global const char  *dist,
                          __global const float *w,
-                         __global const int   *buffer,
                          __global const int   *bt6,    /* nbins^6 config table */
                          __global float       *part_n4,
                          __global float       *part_r4,
@@ -232,7 +227,6 @@ __kernel void k_4pcf_all(__global const long  *ptr,
             int bk = (i - istart) % nbuckets;
             if (bk < blo || bk >= bhi) continue;
         }
-        if (buffer[i - 1] == 1) continue;
         long s  = ptr[i - 1];
         int  nn = (int)(ptr[i] - s);
         if (nn <= 2) continue;
@@ -286,7 +280,6 @@ __kernel void k_4pcf_parity(__global const long  *ptr,
                             __global const char  *dist,
                             __global const char  *phi,
                             __global const float *w,
-                            __global const int   *buffer,
                             __global const int   *bt6,
                             __global const char  *signv,  /* ndir^3 sign table */
                             __global float       *pn_even,
@@ -316,7 +309,6 @@ __kernel void k_4pcf_parity(__global const long  *ptr,
             int bk = (i - istart) % nbuckets;
             if (bk < blo || bk >= bhi) continue;
         }
-        if (buffer[i - 1] == 1) continue;
         long s  = ptr[i - 1];
         int  nn = (int)(ptr[i] - s);
         if (nn <= 2) continue;
