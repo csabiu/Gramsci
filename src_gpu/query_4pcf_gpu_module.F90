@@ -45,6 +45,16 @@
 ! Phase 2's O(nn^3), so the overhead is small.  Device footprint: hub window +
 ! two staged search windows + lmat scratch.
 !
+! Jackknife (-njk): per-region touching sums are accumulated with direct
+! ATOMIC UPDATEs into device copies of the host N4jk/R4jk arrays
+! (n_configs, nch, njk).  Unlike the 3PCF's (bin, slot, region) partials, no
+! slot or gang dimension is used: at 4PCF configuration counts that layout
+! would need terabytes, while direct atomics scatter over n_configs*njk
+! entries so collisions are rare (the same reasoning as the CPU OpenMP
+! kernels; see allocate_4pcf_jk in config_module).  The arrays ride the
+! outermost DATA region as COPY, so the accumulated sums land straight in
+! the host arrays that write_4pcf_jackknife already consumes.
+!
 ! Write routines and S4 symmetry table are reused from query_4pcf_module.
 ! ---------------------------------------------------------------------------
 module query_4pcf_gpu_module
@@ -53,7 +63,7 @@ module query_4pcf_gpu_module
   use config_module
   use csr_module
   use query_4pcf_module, only: &
-    write_4pcf_results, write_4pcf_results_noparity, &
+    write_4pcf_results, write_4pcf_results_noparity, write_4pcf_jackknife, &
     dir_x, dir_y, dir_z, VOL_DEGEN_TOL, px, py, pz
   implicit none
 
@@ -71,10 +81,13 @@ contains
     real(kdkind) :: w12, w4
     logical :: rand12
     integer :: num_data_g, n_configs_g
+    ! Jackknife: hub/neighbor region labels (jr1..jr3 hoisted per loop
+    ! level and gang-private; jr4 is read in the vector loop).
+    integer :: njk_g, jr1, jr2, jr3, jr4
 
     ! Runtime sizing
     integer :: max_nn, ngang, nwin, env_stat
-    integer(int64) :: mnn2, lmat_bytes, freeb, win_edges
+    integer(int64) :: mnn2, lmat_bytes, freeb, win_edges, jk_bytes
     character(32) :: env
 
     ! Chunking bookkeeping
@@ -103,23 +116,41 @@ contains
 
     num_data_g  = cfg%num_data
     n_configs_g = cfg%n_configs_4pcf
+    njk_g       = cfg%njk
 
     ! ---- Runtime sizing -------------------------------------------------
     max_nn = max(csr_max_row_len(), 1)
     mnn2   = int(max_nn, int64)**2
     freeb  = gpu_free_mem_bytes()
 
+    ! Jackknife accumulators resident on device for the whole query
+    ! (N4jk + R4jk, one channel).  Charged against the gang and window
+    ! budgets below so legitimate sizes shrink the windows instead of
+    ! exhausting the device.
+    jk_bytes = 0_int64
+    if (njk_g > 0) then
+      jk_bytes = 2_int64 * int(n_configs_g, int64) * int(njk_g, int64) * 8_int64
+      if (cfg%rank == 0) &
+        print '(" 4PCF GPU jackknife accumulators: ",f8.2," GB on device")', &
+          real(jk_bytes, kdkind) / 1.0d9
+      if (freeb >= 0 .and. jk_bytes > max(freeb - RESERVE_BYTES, 0_int64) / 2) then
+        print *, 'ERROR: 4PCF jackknife accumulators exceed half the free'
+        print *, '       device memory; reduce -njk or -nbins'
+        stop 1
+      end if
+    end if
+
     if (freeb < 0) then
       ngang = 1024        ! host fallback: no device limit, modest scratch
     else
       ! lmat scratch capped at ~1/3 of available device memory.
       ngang = int(min(4096_int64, max(512_int64, &
-                      ((freeb - RESERVE_BYTES) / 3) / mnn2)))
+                      ((freeb - RESERVE_BYTES - jk_bytes) / 3) / mnn2)))
     end if
     lmat_bytes = int(ngang, int64) * mnn2
 
     ! Three edge windows (hub + 2 search) resident in chunked mode.
-    win_edges = csr_edge_window(3, lmat_bytes)
+    win_edges = csr_edge_window(3, lmat_bytes + jk_bytes)
     nwin = int((csr_total_edges - 1) / win_edges) + 1
     ! Without an explicit override, prefer single-pass whenever the whole
     ! CSR fits alongside the scratch (= up to 3 windows' worth of edges).
@@ -141,8 +172,8 @@ contains
       ! Single-pass path: whole CSR + lmat scratch fits on the device.
       ! =====================================================================
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, bintable6) &
-      !$ACC& CREATE(lmat_g) COPY(part_n4, part_r4)
+      !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, bintable6, region) &
+      !$ACC& CREATE(lmat_g) COPY(part_n4, part_r4, N4jk, R4jk)
 
       ! One gang per ig slot; hubs dealt round-robin so gang loads even out.
       ! Each gang exclusively owns lmat_g(:,:,ig) and part_*(:,ig).
@@ -150,13 +181,14 @@ contains
       ! vectors keep lanes busier than 128 while still filling the SMs.
       !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(64) &
       !$ACC& PRIVATE(ig, i, k1, k2, nn_i, id1, id2, base_i, &
-      !$ACC&         ind1, ind2, ind4, w12, rand12)
+      !$ACC&         ind1, ind2, ind4, w12, rand12, jr1, jr2, jr3)
       do ig = 1, ngang
         do i = istart + ig - 1, iend, ngang
           nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
           if (nn_i <= 2) cycle
 
           base_i = csr_ptr(i) - 1
+          if (njk_g > 0) jr1 = region(i)
 
           ! ---- Phase 1: precompute local connectivity matrix ---------------
           ! C(nn_i, 2) binary searches.  For fixed k1 all lanes search the SAME
@@ -175,17 +207,19 @@ contains
           do k1 = 1, nn_i
             ind1 = csr_dist(base_i + k1)
             id1  = csr_id  (base_i + k1)
+            if (njk_g > 0) jr2 = region(id1)
 
             do k2 = k1 + 1, nn_i
               ind4 = lmat_g(k2, k1, ig)   ! O(1) lookup: dist bin of k1→k2
               if (ind4 == 0) cycle
               ind2 = csr_dist(base_i + k2)
               id2  = csr_id  (base_i + k2)
+              if (njk_g > 0) jr3 = region(id2)
               w12  = weights(i) * weights(id1) * weights(id2)
               rand12 = (i > num_data_g .and. id1 > num_data_g .and. &
                         id2 > num_data_g)
 
-              !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, ind3, ind5, ind6, w4)
+              !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, ind3, ind5, ind6, w4, jr4)
               do k3 = k2 + 1, nn_i
                 ind5 = lmat_g(k3, k1, ig)   ! stride-1 across lanes
                 if (ind5 == 0) cycle
@@ -207,6 +241,48 @@ contains
                 if (rand12 .and. id3 > num_data_g) then
                   !$ACC ATOMIC UPDATE
                   part_r4(config_idx, ig) = part_r4(config_idx, ig) + w4
+                end if
+
+                ! Jackknife: count this quadruplet against each DISTINCT region
+                ! it touches (unrolled dedup cascade, as in the 3PCF kernel).
+                ! Direct atomics into the device copies of N4jk/R4jk -- no slot
+                ! or gang dimension (see the module header).
+                if (njk_g > 0) then
+                  jr4 = region(id3)
+                  if (jr1 > 0) then
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 1, jr1) = N4jk(config_idx, 1, jr1) + w4
+                  end if
+                  if (jr2 > 0 .and. jr2 /= jr1) then
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 1, jr2) = N4jk(config_idx, 1, jr2) + w4
+                  end if
+                  if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 1, jr3) = N4jk(config_idx, 1, jr3) + w4
+                  end if
+                  if (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3) then
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 1, jr4) = N4jk(config_idx, 1, jr4) + w4
+                  end if
+                  if (rand12 .and. id3 > num_data_g) then
+                    if (jr1 > 0) then
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 1, jr1) = R4jk(config_idx, 1, jr1) + w4
+                    end if
+                    if (jr2 > 0 .and. jr2 /= jr1) then
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 1, jr2) = R4jk(config_idx, 1, jr2) + w4
+                    end if
+                    if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 1, jr3) = R4jk(config_idx, 1, jr3) + w4
+                    end if
+                    if (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3) then
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 1, jr4) = R4jk(config_idx, 1, jr4) + w4
+                    end if
+                  end if
                 end if
 
               end do  ! k3 (VECTOR)
@@ -239,8 +315,8 @@ contains
       allocate(stage2_id(maxw), stage2_dist(maxw))
 
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, weights, bintable6) &
-      !$ACC& CREATE(lmat_g) COPY(part_n4, part_r4)
+      !$ACC& COPYIN(csr_ptr, weights, bintable6, region) &
+      !$ACC& CREATE(lmat_g) COPY(part_n4, part_r4, N4jk, R4jk)
 
       do cw1 = 1, nwin
         w1lo = split_id(cw1)
@@ -276,13 +352,14 @@ contains
             !$ACC DATA COPYIN(csr_id(elo_h:ehi_h), csr_dist(elo_h:ehi_h))
             !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(64) &
             !$ACC& PRIVATE(ig, i, k1, k2, nn_i, id1, id2, base_i, &
-            !$ACC&         ind1, ind2, ind4, w12, rand12)
+            !$ACC&         ind1, ind2, ind4, w12, rand12, jr1, jr2, jr3)
             do ig = 1, ngang
               do i = hublo + ig - 1, hubhi, ngang
                 nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
                 if (nn_i <= 2) cycle
 
                 base_i = csr_ptr(i) - 1
+                if (njk_g > 0) jr1 = region(i)
 
                 ! ---- Phase 1a: lmat columns for neighbors in window cw1 ----
                 do k1 = 1, nn_i
@@ -315,6 +392,7 @@ contains
                   id1 = csr_id(base_i + k1)
                   if (id1 < w1lo .or. id1 > w1hi) cycle
                   ind1 = csr_dist(base_i + k1)
+                  if (njk_g > 0) jr2 = region(id1)
 
                   do k2 = k1 + 1, nn_i
                     id2 = csr_id(base_i + k2)
@@ -322,11 +400,12 @@ contains
                     ind4 = lmat_g(k2, k1, ig)
                     if (ind4 == 0) cycle
                     ind2 = csr_dist(base_i + k2)
+                    if (njk_g > 0) jr3 = region(id2)
                     w12  = weights(i) * weights(id1) * weights(id2)
                     rand12 = (i > num_data_g .and. id1 > num_data_g .and. &
                               id2 > num_data_g)
 
-                    !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, ind3, ind5, ind6, w4)
+                    !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, ind3, ind5, ind6, w4, jr4)
                     do k3 = k2 + 1, nn_i
                       ind5 = lmat_g(k3, k1, ig)
                       if (ind5 == 0) cycle
@@ -348,6 +427,48 @@ contains
                       if (rand12 .and. id3 > num_data_g) then
                         !$ACC ATOMIC UPDATE
                         part_r4(config_idx, ig) = part_r4(config_idx, ig) + w4
+                      end if
+
+                      ! Jackknife: count this quadruplet against each DISTINCT region
+                      ! it touches (unrolled dedup cascade, as in the 3PCF kernel).
+                      ! Direct atomics into the device copies of N4jk/R4jk -- no slot
+                      ! or gang dimension (see the module header).
+                      if (njk_g > 0) then
+                        jr4 = region(id3)
+                        if (jr1 > 0) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr1) = N4jk(config_idx, 1, jr1) + w4
+                        end if
+                        if (jr2 > 0 .and. jr2 /= jr1) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr2) = N4jk(config_idx, 1, jr2) + w4
+                        end if
+                        if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr3) = N4jk(config_idx, 1, jr3) + w4
+                        end if
+                        if (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr4) = N4jk(config_idx, 1, jr4) + w4
+                        end if
+                        if (rand12 .and. id3 > num_data_g) then
+                          if (jr1 > 0) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr1) = R4jk(config_idx, 1, jr1) + w4
+                          end if
+                          if (jr2 > 0 .and. jr2 /= jr1) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr2) = R4jk(config_idx, 1, jr2) + w4
+                          end if
+                          if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr3) = R4jk(config_idx, 1, jr3) + w4
+                          end if
+                          if (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr4) = R4jk(config_idx, 1, jr4) + w4
+                          end if
+                        end if
                       end if
 
                     end do  ! k3 (VECTOR)
@@ -377,6 +498,7 @@ contains
     deallocate(lmat_g, part_n4, part_r4)
 
     call write_4pcf_results_noparity()
+    call write_4pcf_jackknife(.false.)
   end subroutine query_graph_4pcf_gpu
 
 
@@ -397,14 +519,17 @@ contains
     integer(int64) :: base_i
     integer(int8) :: ind1, ind2, ind3, ind4, ind5, ind6
     integer :: p1, p2, p3, raw_bin
-    real(kdkind) :: w12, w4, vol
+    real(kdkind) :: w12, w4, vol, sv4
     real(kdkind) :: u1x, u1y, u1z, u2x, u2y, u2z, u3x, u3y, u3z, rn1, rn3
     logical :: rand12, exact_g
     integer :: num_data_g, n_configs_g
+    ! Jackknife: hub/neighbor region labels (jr1..jr3 hoisted per loop
+    ! level and gang-private; jr4 is read in the vector loop).
+    integer :: njk_g, jr1, jr2, jr3, jr4
 
     ! Runtime sizing
     integer :: max_nn, ngang, nwin, env_stat
-    integer(int64) :: mnn2, lmat_bytes, freeb, win_edges
+    integer(int64) :: mnn2, lmat_bytes, freeb, win_edges, jk_bytes
     character(32) :: env
 
     ! Chunking bookkeeping
@@ -434,6 +559,7 @@ contains
     num_data_g  = cfg%num_data
     n_configs_g = cfg%n_configs_4pcf
     exact_g     = cfg%exact_parity
+    njk_g       = cfg%njk
     ! dummies so the COPYIN clauses are always valid
     if (.not. allocated(px)) allocate(px(1), py(1), pz(1))
     if (.not. allocated(csr_phi)) allocate(csr_phi(1))
@@ -443,18 +569,34 @@ contains
     mnn2   = int(max_nn, int64)**2
     freeb  = gpu_free_mem_bytes()
 
+    ! Jackknife accumulators (N4jk + R4jk, two channels) resident on the
+    ! device for the whole query; charged against the budgets below.
+    jk_bytes = 0_int64
+    if (njk_g > 0) then
+      jk_bytes = 2_int64 * int(n_configs_g, int64) * 2_int64 * &
+                 int(njk_g, int64) * 8_int64
+      if (cfg%rank == 0) &
+        print '(" 4PCFp GPU jackknife accumulators: ",f8.2," GB on device")', &
+          real(jk_bytes, kdkind) / 1.0d9
+      if (freeb >= 0 .and. jk_bytes > max(freeb - RESERVE_BYTES, 0_int64) / 2) then
+        print *, 'ERROR: 4PCF jackknife accumulators exceed half the free'
+        print *, '       device memory; reduce -njk or -nbins'
+        stop 1
+      end if
+    end if
+
     if (freeb < 0) then
       ngang = 1024
     else
       ngang = int(min(4096_int64, max(512_int64, &
-                      ((freeb - RESERVE_BYTES) / 3) / mnn2)))
+                      ((freeb - RESERVE_BYTES - jk_bytes) / 3) / mnn2)))
     end if
     lmat_bytes = int(ngang, int64) * mnn2
 
     ! 4 window budgets: hub window costs 7 B/edge (id 4 + dist 1 + phi 2), the
     ! two staged search windows 5 B/edge — a 4×5 B budget covers 7+5+5 with
     ! slack.
-    win_edges = csr_edge_window(4, lmat_bytes)
+    win_edges = csr_edge_window(4, lmat_bytes + jk_bytes)
     nwin = int((csr_total_edges - 1) / win_edges) + 1
     call get_environment_variable('GRAMSCI_GPU_WIN_EDGES', env, status=env_stat)
     ! Collapse to a single pass only if the resident window really fits: 7 B/edge
@@ -484,19 +626,20 @@ contains
       ! =====================================================================
       !$ACC DATA &
       !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, csr_phi, weights, &
-      !$ACC&        bintable6, dir_x, dir_y, dir_z, px, py, pz) &
-      !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4)
+      !$ACC&        bintable6, dir_x, dir_y, dir_z, px, py, pz, region) &
+      !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4, N4jk, R4jk)
 
       !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(64) &
       !$ACC& PRIVATE(ig, i, k1, k2, nn_i, id1, id2, base_i, &
       !$ACC&         ind1, ind2, ind4, p1, p2, w12, rand12, &
-      !$ACC&         u1x, u1y, u1z, u2x, u2y, u2z, rn1)
+      !$ACC&         u1x, u1y, u1z, u2x, u2y, u2z, rn1, jr1, jr2, jr3)
       do ig = 1, ngang
         do i = istart + ig - 1, iend, ngang
           nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
           if (nn_i <= 2) cycle
 
           base_i = csr_ptr(i) - 1
+          if (njk_g > 0) jr1 = region(i)
 
           ! ---- Phase 1: connectivity matrix ------------------------------
           do k1 = 1, nn_i
@@ -528,6 +671,7 @@ contains
           do k1 = 1, nn_i
             ind1 = csr_dist(base_i + k1)
             id1  = csr_id  (base_i + k1)
+            if (njk_g > 0) jr2 = region(id1)
             if (exact_g) then
               u1x = ug(k1, 1, ig); u1y = ug(k1, 2, ig); u1z = ug(k1, 3, ig)
             else
@@ -539,6 +683,7 @@ contains
               if (ind4 == 0) cycle
               ind2 = csr_dist(base_i + k2)
               id2  = csr_id  (base_i + k2)
+              if (njk_g > 0) jr3 = region(id2)
               if (exact_g) then
                 u2x = ug(k2, 1, ig); u2y = ug(k2, 2, ig); u2z = ug(k2, 3, ig)
               else
@@ -550,7 +695,7 @@ contains
 
               !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, raw_bin, &
               !$ACC&   parity_flip, sign_V, ind3, ind5, ind6, p3, w4, vol, &
-              !$ACC&   u3x, u3y, u3z, rn3)
+              !$ACC&   u3x, u3y, u3z, rn3, sv4, jr4)
               do k3 = k2 + 1, nn_i
                 ind5 = lmat_g(k3, k1, ig)
                 if (ind5 == 0) cycle
@@ -586,19 +731,76 @@ contains
                 end if
 
                 w4  = w12 * weights(id3)
+                sv4 = (parity_flip * sign_V) * w4
 
                 !$ACC ATOMIC UPDATE
                 part_n4(config_idx, 1, ig) = part_n4(config_idx, 1, ig) + w4
                 !$ACC ATOMIC UPDATE
-                part_n4(config_idx, 2, ig) = part_n4(config_idx, 2, ig) &
-                                             + (parity_flip * sign_V) * w4
+                part_n4(config_idx, 2, ig) = part_n4(config_idx, 2, ig) + sv4
 
                 if (rand12 .and. id3 > num_data_g) then
                   !$ACC ATOMIC UPDATE
                   part_r4(config_idx, 1, ig) = part_r4(config_idx, 1, ig) + w4
                   !$ACC ATOMIC UPDATE
-                  part_r4(config_idx, 2, ig) = part_r4(config_idx, 2, ig) &
-                                               + (parity_flip * sign_V) * w4
+                  part_r4(config_idx, 2, ig) = part_r4(config_idx, 2, ig) + sv4
+                end if
+
+                ! Jackknife: count this quadruplet against each DISTINCT region
+                ! it touches (unrolled dedup cascade, as in the 3PCF kernel).
+                ! Direct atomics into the device copies of N4jk/R4jk -- no slot
+                ! or gang dimension (see the module header).
+                if (njk_g > 0) then
+                  jr4 = region(id3)
+                  if (jr1 > 0) then
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 1, jr1) = N4jk(config_idx, 1, jr1) + w4
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 2, jr1) = N4jk(config_idx, 2, jr1) + sv4
+                  end if
+                  if (jr2 > 0 .and. jr2 /= jr1) then
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 1, jr2) = N4jk(config_idx, 1, jr2) + w4
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 2, jr2) = N4jk(config_idx, 2, jr2) + sv4
+                  end if
+                  if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 1, jr3) = N4jk(config_idx, 1, jr3) + w4
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 2, jr3) = N4jk(config_idx, 2, jr3) + sv4
+                  end if
+                  if (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3) then
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 1, jr4) = N4jk(config_idx, 1, jr4) + w4
+                    !$ACC ATOMIC UPDATE
+                    N4jk(config_idx, 2, jr4) = N4jk(config_idx, 2, jr4) + sv4
+                  end if
+                  if (rand12 .and. id3 > num_data_g) then
+                    if (jr1 > 0) then
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 1, jr1) = R4jk(config_idx, 1, jr1) + w4
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 2, jr1) = R4jk(config_idx, 2, jr1) + sv4
+                    end if
+                    if (jr2 > 0 .and. jr2 /= jr1) then
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 1, jr2) = R4jk(config_idx, 1, jr2) + w4
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 2, jr2) = R4jk(config_idx, 2, jr2) + sv4
+                    end if
+                    if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 1, jr3) = R4jk(config_idx, 1, jr3) + w4
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 2, jr3) = R4jk(config_idx, 2, jr3) + sv4
+                    end if
+                    if (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3) then
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 1, jr4) = R4jk(config_idx, 1, jr4) + w4
+                      !$ACC ATOMIC UPDATE
+                      R4jk(config_idx, 2, jr4) = R4jk(config_idx, 2, jr4) + sv4
+                    end if
+                  end if
                 end if
 
               end do  ! k3 (VECTOR)
@@ -629,8 +831,8 @@ contains
 
       !$ACC DATA &
       !$ACC& COPYIN(csr_ptr, weights, bintable6, dir_x, dir_y, dir_z, &
-      !$ACC&        px, py, pz) &
-      !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4)
+      !$ACC&        px, py, pz, region) &
+      !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4, N4jk, R4jk)
 
       do cw1 = 1, nwin
         w1lo = split_id(cw1)
@@ -676,13 +878,14 @@ contains
             !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(64) &
             !$ACC& PRIVATE(ig, i, k1, k2, nn_i, id1, id2, base_i, &
             !$ACC&         ind1, ind2, ind4, p1, p2, w12, rand12, &
-            !$ACC&         u1x, u1y, u1z, u2x, u2y, u2z, rn1)
+            !$ACC&         u1x, u1y, u1z, u2x, u2y, u2z, rn1, jr1, jr2, jr3)
             do ig = 1, ngang
               do i = hublo + ig - 1, hubhi, ngang
                 nn_i = int(csr_ptr(i + 1) - csr_ptr(i))
                 if (nn_i <= 2) cycle
 
                 base_i = csr_ptr(i) - 1
+                if (njk_g > 0) jr1 = region(i)
 
                 ! ---- Phase 1a: columns for neighbors in window cw1 ---------
                 do k1 = 1, nn_i
@@ -730,6 +933,7 @@ contains
                   id1 = csr_id(base_i + k1)
                   if (id1 < w1lo .or. id1 > w1hi) cycle
                   ind1 = csr_dist(base_i + k1)
+                  if (njk_g > 0) jr2 = region(id1)
                   if (exact_g) then
                     u1x = ug(k1, 1, ig); u1y = ug(k1, 2, ig); u1z = ug(k1, 3, ig)
                   else
@@ -742,6 +946,7 @@ contains
                     ind4 = lmat_g(k2, k1, ig)
                     if (ind4 == 0) cycle
                     ind2 = csr_dist(base_i + k2)
+                    if (njk_g > 0) jr3 = region(id2)
                     if (exact_g) then
                       u2x = ug(k2, 1, ig); u2y = ug(k2, 2, ig); u2z = ug(k2, 3, ig)
                     else
@@ -753,7 +958,7 @@ contains
 
                     !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, raw_bin, &
                     !$ACC&   parity_flip, sign_V, ind3, ind5, ind6, p3, w4, vol, &
-                    !$ACC&   u3x, u3y, u3z, rn3)
+                    !$ACC&   u3x, u3y, u3z, rn3, sv4, jr4)
                     do k3 = k2 + 1, nn_i
                       ind5 = lmat_g(k3, k1, ig)
                       if (ind5 == 0) cycle
@@ -789,19 +994,76 @@ contains
                       end if
 
                       w4  = w12 * weights(id3)
+                      sv4 = (parity_flip * sign_V) * w4
 
                       !$ACC ATOMIC UPDATE
                       part_n4(config_idx, 1, ig) = part_n4(config_idx, 1, ig) + w4
                       !$ACC ATOMIC UPDATE
-                      part_n4(config_idx, 2, ig) = part_n4(config_idx, 2, ig) &
-                                                   + (parity_flip * sign_V) * w4
+                      part_n4(config_idx, 2, ig) = part_n4(config_idx, 2, ig) + sv4
 
                       if (rand12 .and. id3 > num_data_g) then
                         !$ACC ATOMIC UPDATE
                         part_r4(config_idx, 1, ig) = part_r4(config_idx, 1, ig) + w4
                         !$ACC ATOMIC UPDATE
-                        part_r4(config_idx, 2, ig) = part_r4(config_idx, 2, ig) &
-                                                     + (parity_flip * sign_V) * w4
+                        part_r4(config_idx, 2, ig) = part_r4(config_idx, 2, ig) + sv4
+                      end if
+
+                      ! Jackknife: count this quadruplet against each DISTINCT region
+                      ! it touches (unrolled dedup cascade, as in the 3PCF kernel).
+                      ! Direct atomics into the device copies of N4jk/R4jk -- no slot
+                      ! or gang dimension (see the module header).
+                      if (njk_g > 0) then
+                        jr4 = region(id3)
+                        if (jr1 > 0) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr1) = N4jk(config_idx, 1, jr1) + w4
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 2, jr1) = N4jk(config_idx, 2, jr1) + sv4
+                        end if
+                        if (jr2 > 0 .and. jr2 /= jr1) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr2) = N4jk(config_idx, 1, jr2) + w4
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 2, jr2) = N4jk(config_idx, 2, jr2) + sv4
+                        end if
+                        if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr3) = N4jk(config_idx, 1, jr3) + w4
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 2, jr3) = N4jk(config_idx, 2, jr3) + sv4
+                        end if
+                        if (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr4) = N4jk(config_idx, 1, jr4) + w4
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 2, jr4) = N4jk(config_idx, 2, jr4) + sv4
+                        end if
+                        if (rand12 .and. id3 > num_data_g) then
+                          if (jr1 > 0) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr1) = R4jk(config_idx, 1, jr1) + w4
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 2, jr1) = R4jk(config_idx, 2, jr1) + sv4
+                          end if
+                          if (jr2 > 0 .and. jr2 /= jr1) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr2) = R4jk(config_idx, 1, jr2) + w4
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 2, jr2) = R4jk(config_idx, 2, jr2) + sv4
+                          end if
+                          if (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr3) = R4jk(config_idx, 1, jr3) + w4
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 2, jr3) = R4jk(config_idx, 2, jr3) + sv4
+                          end if
+                          if (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr4) = R4jk(config_idx, 1, jr4) + w4
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 2, jr4) = R4jk(config_idx, 2, jr4) + sv4
+                          end if
+                        end if
                       end if
 
                     end do  ! k3 (VECTOR)
@@ -834,6 +1096,7 @@ contains
     if (allocated(ug)) deallocate(ug)
 
     call write_4pcf_results()
+    call write_4pcf_jackknife(.true.)
   end subroutine query_graph_4pcf_parity_gpu
 
 end module query_4pcf_gpu_module

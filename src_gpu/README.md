@@ -41,10 +41,23 @@ Input catalogs are 4-column ASCII (`x y z weight`, comoving Mpc/h).
 | Mode      | Execution                                  |
 |-----------|--------------------------------------------|
 | `-2pcf`   | CPU (O(edges), not worth GPU offload)       |
-| `-3pcf`   | GPU (isotropic); CPU fallback when `-nmu` > 1 (RSD) |
-| `-equi`   | GPU (isotropic); CPU fallback when `-nmu` > 1       |
-| `-4pcf`   | GPU                                         |
-| `-4pcfp`  | GPU (parity decomposition)                  |
+| `-3pcf`   | GPU (isotropic, incl. `-njk`); CPU fallback when `-nmu` > 1 (RSD) |
+| `-equi`   | GPU (isotropic); CPU fallback when `-nmu` > 1 or `-njk` > 0 |
+| `-4pcf`   | GPU (incl. `-njk`)                          |
+| `-4pcfp`  | GPU (parity decomposition, incl. `-njk`)    |
+
+**Jackknife (`-njk`)** runs on the GPU for the isotropic 3PCF and both 4PCF
+modes.  The 3PCF uses slot-strided `(bin, slot, region)` partials; the 4PCF
+kernels instead update device copies of the host `N4jk`/`R4jk` arrays with
+direct `ATOMIC UPDATE`s — no slot or gang dimension, because at 4PCF
+configuration counts a slotted layout would need terabytes, while direct
+atomics scatter over `n_configs × njk` entries so collisions are rare.  The
+accumulators (2 × n_configs × channels × njk × 8 B) stay resident for the
+whole query and are charged against the gang and edge-window budgets, with
+a hard error if they would exceed half the free device memory (reduce
+`-njk` or `-nbins`).  `validate.sh` compares every jackknife sidecar
+(`.jk`, `.jkerr`, `.jkcov`, `.jkcov_odd`) against the CPU reference in both
+single-pass and forced-chunked modes.
 
 Graph construction (kd-tree pair finding) always runs on the CPU with OpenMP
 and typically takes a small fraction of the total runtime.

@@ -178,34 +178,6 @@ program Ngramsci_gpu
     N3 = 0.0d0
   end if
 
-  ! 4PCF with jackknife: the OpenACC 4PCF kernels have no jackknife
-  ! accumulation, so run the CPU merge-walk here — after the internal 2PCF
-  ! (whose xi0 the write routines need) and before build_csr (which frees
-  ! the jagged output(:) these kernels walk).
-  if (cfg%four_pcf .and. cfg%njk > 0) then
-    if (cfg%rank == 0) print *, '4PCF with -njk: running on CPU'
-    allocate(N4(cfg%n_configs_4pcf, 1))
-    allocate(R4(cfg%n_configs_4pcf, 1))
-    N4 = 0.0d0 ; R4 = 0.0d0
-    call allocate_4pcf_jk(1)
-    call query_graph_4pcf(1, cfg%num_data + cfg%num_rand)
-    deallocate(N4) ; deallocate(R4)
-    call free_4pcf_jk()
-  end if
-
-  if (cfg%four_pcf_parity .and. cfg%njk > 0) then
-    if (cfg%rank == 0) print *, '4PCF parity with -njk: running on CPU'
-    call init_direction_lookup()
-    allocate(N4(cfg%n_configs_4pcf, 2))
-    allocate(R4(cfg%n_configs_4pcf, 2))
-    N4 = 0.0d0 ; R4 = 0.0d0
-    call allocate_4pcf_jk(2)
-    call query_graph_4pcf_parity(1, cfg%num_data + cfg%num_rand)
-    deallocate(N4) ; deallocate(R4)
-    call free_4pcf_jk()
-    call cleanup_direction_lookup()
-  end if
-
   ! ---- Flatten graph to CSR ----
   ! build_csr frees each jagged row as it copies (and deallocates output),
   ! keeping peak host RAM at ~one graph copy.  All subsequent kernels use CSR.
@@ -230,21 +202,29 @@ program Ngramsci_gpu
     call query_graph_equilateral_gpu(1, cfg%num_data + cfg%num_rand)
   end if
 
-  if (cfg%four_pcf .and. cfg%njk <= 0) then
+  ! Both 4PCF kernels accumulate the jackknife touching sums on the device
+  ! (direct atomics into N4jk/R4jk), so -njk no longer routes them to the
+  ! CPU.  allocate_4pcf_jk is called unconditionally: the kernels' COPY
+  ! clauses name N4jk/R4jk either way (dummy 1-region slice when off).
+  if (cfg%four_pcf) then
     allocate(N4(cfg%n_configs_4pcf, 1))
     allocate(R4(cfg%n_configs_4pcf, 1))
     N4 = 0.0d0 ; R4 = 0.0d0
+    call allocate_4pcf_jk(1)
     call query_graph_4pcf_gpu(1, cfg%num_data + cfg%num_rand)
     deallocate(N4) ; deallocate(R4)
+    call free_4pcf_jk()
   end if
 
-  if (cfg%four_pcf_parity .and. cfg%njk <= 0) then
+  if (cfg%four_pcf_parity) then
     call init_direction_lookup()
     allocate(N4(cfg%n_configs_4pcf, 2))
     allocate(R4(cfg%n_configs_4pcf, 2))
     N4 = 0.0d0 ; R4 = 0.0d0
+    call allocate_4pcf_jk(2)
     call query_graph_4pcf_parity_gpu(1, cfg%num_data + cfg%num_rand)
     deallocate(N4) ; deallocate(R4)
+    call free_4pcf_jk()
     call cleanup_direction_lookup()
   end if
 

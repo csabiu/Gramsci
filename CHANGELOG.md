@@ -33,6 +33,34 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   `bintable6` fill and `-exactparity` chirality signs) and by a
   combined-vs-single-mode identity test.
 
+### Added (GPU jackknife for the 4PCF)
+- **The OpenACC build now runs `-njk` on the GPU for `-4pcf` and `-4pcfp`**
+  (previously routed to the CPU merge-walk, sacrificing the GPU speedup
+  exactly where it matters).  All four kernel variants (parity/non-parity ×
+  single-pass/chunked) accumulate the per-region touching sums with direct
+  `ATOMIC UPDATE`s into device copies of the host `N4jk`/`R4jk` arrays —
+  unlike the 3PCF's slot-strided partials, no slot/gang dimension is used
+  (terabytes at 4PCF config counts; direct atomics scatter over
+  `n_configs × njk` entries, the same reasoning as the CPU OpenMP path).
+  Region labels are deduplicated per quadruplet with the unrolled cascade,
+  the accumulator bytes are charged against the gang and edge-window
+  budgets (hard error above half the free device memory), and the entire
+  write path — including the per-realisation disconnected-term xi0 — is
+  the existing CPU one.  `src_gpu/validate.sh` gains five jackknife
+  comparisons (3PCF/4PCF/4PCFp single-pass, 4PCF/4PCFp forced-chunked)
+  covering every sidecar file, and falls back to `example/` test data.
+  Verified end-to-end on a gfortran `-fopenacc` host-fallback build: the
+  brute-force delete-one identities pass on the OpenACC kernels, CPU vs
+  OpenACC agreement is at file precision for all jackknife outputs in both
+  single-pass and 196-tile chunked runs, and the full extended validate.sh
+  passes 9/9 at 1e-8 absolute tolerance.  Still to be confirmed on real
+  NVIDIA hardware with nvfortran (not available on this machine).
+- Removed a dead, half-wired jackknife block from the equilateral GPU
+  kernel (`part_*_jk` named in `COPY` clauses but never allocated, `njk_g`
+  read but never set) that would have gone live — and crashed — if its
+  driver gate ever changed.  The equilateral `-njk` case stays on the
+  cheap CPU fallback.
+
 ### Added (jackknife covariances and 2PCF multipoles)
 - **Jackknife covariance matrices**: every `-njk` mode now also writes
   `<out>[.<mode>].jkcov` — the full delete-one covariance of the primary
