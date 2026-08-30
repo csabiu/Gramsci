@@ -8,6 +8,16 @@ module config_module
   ! printed by -version and stamped into every output file's header.
   character(len=*), parameter :: GRAMSCI_VERSION = '2.5.0'
 
+  ! Jackknife empty-realisation threshold: a delete-one denominator that
+  ! retains less than this fraction of the total random count is treated as
+  ! empty (estimator written as 0).  An EXACT zero test is not robust when
+  ! the totals and the touching sums come from differently-rounded
+  ! accumulations (fp32 CAS atomics on OpenCL, fp64 atomics on OpenACC):
+  ! a realisation that should cancel exactly leaves ~1e-19..1e-16 dust and
+  ! the division explodes.  Real analyses retain >= 1 - 4/njk of the
+  ! randoms per realisation, orders of magnitude above this threshold.
+  real(kdkind), parameter :: JK_DENOM_TOL = 1.0d-4
+
   ! Configuration derived type bundling all parameters
   type :: gramsci_config
     integer :: d = 3

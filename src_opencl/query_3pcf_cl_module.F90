@@ -16,7 +16,8 @@ module query_3pcf_cl_module
   use config_module
   use csr_cl_module
   use cl_env_module
-  use query_3pcf_module, only: write_3pcf_results, write_equilateral_results
+  use query_3pcf_module, only: write_3pcf_results, write_equilateral_results, &
+                               write_3pcf_jackknife
   implicit none
   private
   public :: query_graph_3pcf_cl, query_graph_equilateral_cl
@@ -54,12 +55,12 @@ contains
 
   subroutine query_graph_3pcf_cl(istart, iend)
     integer, intent(in) :: istart, iend
-    integer :: cb, nb, bin, g
-    integer(int64) :: ngang, n_hubs, ncol
-    real(real32), allocatable :: wf(:), hn(:), hr(:), hc(:)
-    real(real64), allocatable :: hacc(:,:)
+    integer :: cb, nb, bin, g, m
+    integer(int64) :: ngang, n_hubs, ncol, njkcol
+    real(real32), allocatable :: wf(:), hn(:), hr(:), hc(:), hjk(:)
+    real(real64), allocatable :: hacc(:,:), jkacc(:,:)
     integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_w, b_bt3, b_pn, b_pr, kern
-    integer(c_intptr_t) :: b_pnc, b_prc
+    integer(c_intptr_t) :: b_pnc, b_prc, b_reg, b_jkn, b_jkr
     real(kdkind) :: acc
 
     if (cfg%RSD) then
@@ -83,6 +84,13 @@ contains
     allocate(hacc(ncol, 2))
     hacc = 0.0d0
 
+    ! Jackknife touching sums, [cb x njk] per channel; dummy 1-float buffers
+    ! when off (the kernel signature names them either way).
+    njkcol = max(int(cb, int64) * int(cfg%njk, int64), 1_int64)
+    allocate(hjk(njkcol), jkacc(njkcol, 2))
+    hjk = 0.0_real32
+    jkacc = 0.0d0
+
     ! ---- Upload ----
     b_ptr  = cl_buf_in_i64(csr_ptr,  int(size(csr_ptr),int64))
     b_id   = cl_buf_in_i32(csr_id,   csr_total_edges)
@@ -95,6 +103,9 @@ contains
     b_pr   = cl_buf_zeroed_f32(hr,   ncol)
     b_pnc  = cl_buf_zeroed_f32(hc,   ncol)   ! Kahan compensation of b_pn
     b_prc  = cl_buf_zeroed_f32(hc,   ncol)   ! Kahan compensation of b_pr
+    b_reg  = cl_buf_in_i32(region, n_hubs)
+    b_jkn  = cl_buf_zeroed_f32(hjk, njkcol)
+    b_jkr  = cl_buf_zeroed_f32(hjk, njkcol)
 
     ! ---- Launch ----
     kern = cl_kernel_get('k_3pcf_all')
@@ -113,7 +124,14 @@ contains
     call cl_arg_i32(kern, 12, int(ngang, int32))
     call cl_arg_mem(kern, 17, b_pnc)
     call cl_arg_mem(kern, 18, b_prc)
-    if (cl_run_complete(kern, 13, 14, 15, 16, ngang)) then
+    call cl_arg_mem(kern, 19, b_reg)
+    call cl_arg_mem(kern, 20, b_jkn)
+    call cl_arg_mem(kern, 21, b_jkr)
+    call cl_arg_i32(kern, 22, cfg%njk)
+    ! With -njk the query always runs bucketed: the jackknife buffers are
+    ! plain fp32 (CAS atomics, no Kahan possible), so their precision relies
+    ! on the per-window commit-to-double/re-zero cycle of cl_run_bucketed.
+    if (cfg%njk <= 0 .and. cl_run_complete(kern, 13, 14, 15, 16, ngang)) then
       ! ---- Read back sums and Kahan compensations; true total = sum - comp ----
       call cl_read_f32(b_pn, hn, ncol)
       call cl_read_f32(b_pr, hr, ncol)
@@ -124,13 +142,24 @@ contains
       call cl_read_f32(b_prc, hc, ncol)
       hacc(:, 2) = hacc(:, 2) - real(hc, real64)
     else
-      if (cfg%rank == 0) print *, '  single GPU launch hit the watchdog; retrying tiled (slower)'
+      if (cfg%njk > 0) then
+        if (cfg%rank == 0) print *, '  jackknife: tiled launches '// &
+          '(fp32 partials committed to double each window)'
+      else
+        if (cfg%rank == 0) print *, '  single GPU launch hit the watchdog; retrying tiled (slower)'
+      end if
       call cl_write_f32(b_pn, hn, ncol)   ! hn/hr/hc are still all zeros here
       call cl_write_f32(b_pr, hr, ncol)
       call cl_write_f32(b_pnc, hc, ncol)
       call cl_write_f32(b_prc, hc, ncol)
-      call cl_run_bucketed(kern, 13, 14, 15, 16, ngang, n_hubs, &
-                           [b_pn, b_pnc, b_pr, b_prc], hacc)
+      if (cfg%njk > 0) then
+        call cl_run_bucketed(kern, 13, 14, 15, 16, ngang, n_hubs, &
+                             [b_pn, b_pnc, b_pr, b_prc], hacc, &
+                             plainbufs=[b_jkn, b_jkr], plain_acc=jkacc)
+      else
+        call cl_run_bucketed(kern, 13, 14, 15, 16, ngang, n_hubs, &
+                             [b_pn, b_pnc, b_pr, b_prc], hacc)
+      end if
     end if
 
     ! ---- Reduce columns (already double) ----
@@ -147,13 +176,27 @@ contains
       N3(bin, 1, 3) = N3(bin, 1, 3) + acc
     end do
 
+    ! Jackknife fold: the kernel wrote [cb x njk] touching sums (RRR already
+    ! carries its minus sign); the bucketed runner returned them in double.
+    if (cfg%njk > 0) then
+      do m = 1, cfg%njk
+        do bin = 1, cb
+          N2jk(bin, 1, 3, m) = N2jk(bin, 1, 3, m) + jkacc(int(m-1,int64)*cb + bin, 1)
+          N3jk(bin, 1, 3, m) = N3jk(bin, 1, 3, m) + jkacc(int(m-1,int64)*cb + bin, 2)
+        end do
+      end do
+    end if
+
     call cl_release(b_ptr);  call cl_release(b_id);  call cl_release(b_dist)
     call cl_release(b_w);    call cl_release(b_bt3)
     call cl_release(b_pn);   call cl_release(b_pr)
-    call cl_release(b_pnc);  call cl_release(b_prc); call cl_release_kernel(kern)
-    deallocate(wf, hn, hr, hc, hacc)
+    call cl_release(b_pnc);  call cl_release(b_prc)
+    call cl_release(b_reg);  call cl_release(b_jkn); call cl_release(b_jkr)
+    call cl_release_kernel(kern)
+    deallocate(wf, hn, hr, hc, hacc, hjk, jkacc)
 
     call write_3pcf_results()
+    call write_3pcf_jackknife()
   end subroutine query_graph_3pcf_cl
 
   subroutine query_graph_equilateral_cl(istart, iend)

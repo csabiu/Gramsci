@@ -520,19 +520,29 @@ contains
   ! [sum1, comp1, sum2, comp2, ...].  host_acc(ncol, size(accbufs)/2) must come
   ! in zeroed; on return it holds the complete per-column totals in double and
   ! the device accumulators are zero.
+  !
+  ! plainbufs/plain_acc (optional): additional fp32 accumulator buffers with
+  ! NO Kahan compensation, of a common size size(plain_acc, 1) that may differ
+  ! from ncol.  Used for the jackknife touching sums, which the kernels update
+  ! with CAS-emulated float atomics (kadd needs a paired compensation write and
+  ! cannot be atomic).  They ride the same commit/re-zero cycle, which is what
+  ! keeps their fp32 error bounded: each committed window's per-slot sum is
+  ! small, and the running totals live here in double.
   subroutine cl_run_bucketed(kernel, ia_nbuckets, ia_blo, ia_bhi, ia_flag, global, n_hubs, &
-                             accbufs, host_acc)
+                             accbufs, host_acc, plainbufs, plain_acc)
     integer(c_intptr_t), intent(in) :: kernel
     integer, intent(in) :: ia_nbuckets, ia_blo, ia_bhi, ia_flag
     integer(int64), intent(in) :: global, n_hubs
     integer(c_intptr_t), intent(in) :: accbufs(:)
     real(real64), intent(inout) :: host_acc(:,:)
-    integer :: blo, bhi, gb, doneb, gb0, blo_committed, nacc, j, nfail
-    integer(int64) :: t0, t1, rate, ncol
+    integer(c_intptr_t), intent(in), optional :: plainbufs(:)
+    real(real64), intent(inout), optional :: plain_acc(:,:)
+    integer :: blo, bhi, gb, doneb, gb0, blo_committed, nacc, j, nfail, nplain
+    integer(int64) :: t0, t1, rate, ncol, ncolp
     real(real64) :: dt, target_t, hpw, t_unflushed
     real(real64), parameter :: FLUSH_T = 5.0d0   ! max GPU seconds between commits
     integer(int8), allocatable, target :: flags(:)
-    real(real32), allocatable, target :: s32(:), z32(:)
+    real(real32), allocatable, target :: s32(:), z32(:), s32p(:), z32p(:)
     integer(c_intptr_t) :: bflag
     character(32) :: env
     integer :: stat
@@ -546,6 +556,14 @@ contains
     ncol = size(host_acc, 1)
     allocate(flags(global), s32(ncol), z32(ncol))
     z32 = 0.0_real32
+    nplain = 0
+    ncolp  = 0
+    if (present(plainbufs)) then
+      nplain = size(plainbufs)
+      ncolp  = size(plain_acc, 1)
+      allocate(s32p(ncolp), z32p(ncolp))
+      z32p = 0.0_real32
+    end if
     flags = 0_int8
     bflag = cl_buf_zeroed_i8(flags, global)
     call cl_arg_mem(kernel, ia_flag, bflag)
@@ -587,6 +605,9 @@ contains
         do j = 1, size(accbufs)
           call cl_write_f32(accbufs(j), z32, ncol)
         end do
+        do j = 1, nplain
+          call cl_write_f32(plainbufs(j), z32p, ncolp)
+        end do
         t_unflushed = 0.0d0
         blo = blo_committed
         target_t = max(min(target_t, 0.5d0 * dt), 0.01d0)
@@ -609,6 +630,11 @@ contains
           call cl_write_f32(accbufs(2*j-1), z32, ncol)
           call cl_write_f32(accbufs(2*j),   z32, ncol)
         end do
+        do j = 1, nplain
+          call cl_read_f32(plainbufs(j), s32p, ncolp)
+          plain_acc(:, j) = plain_acc(:, j) + real(s32p, real64)
+          call cl_write_f32(plainbufs(j), z32p, ncolp)
+        end do
         blo_committed = blo
         t_unflushed = 0.0d0
       end if
@@ -625,6 +651,7 @@ contains
 
     call cl_release(bflag)
     deallocate(flags, s32, z32)
+    if (allocated(s32p)) deallocate(s32p, z32p)
   end subroutine cl_run_bucketed
 
   ! -------------------------------------------------------------------------

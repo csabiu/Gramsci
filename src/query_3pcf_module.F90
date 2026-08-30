@@ -409,7 +409,8 @@ contains
             do m = 1, cfg%njk
               n2m = N2(bin, l, 3) - N2jk(bin, l, 3, m)
               n3m = N3(bin, l, 3) - N3jk(bin, l, 3, m)
-              if (n3m /= 0.0d0) then
+              ! Relative emptiness test, not an exact zero (JK_DENOM_TOL note)
+              if (abs(n3m) > JK_DENOM_TOL * abs(N3(bin, l, 3))) then
                 zeta_m(m) = n2m / n3m
               else
                 zeta_m(m) = 0.0d0
@@ -512,7 +513,8 @@ contains
         do m = 1, cfg%njk
           n2m = N2(l, k, 3) - N2jk(l, k, 3, m)
           n3m = N3(l, k, 3) - N3jk(l, k, 3, m)
-          if (n3m /= 0.0d0) then
+          ! Relative emptiness test, not an exact zero (JK_DENOM_TOL note)
+          if (abs(n3m) > JK_DENOM_TOL * abs(N3(l, k, 3))) then
             zeta_m(m) = n2m / n3m
           else
             zeta_m(m) = 0.0d0

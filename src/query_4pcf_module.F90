@@ -1212,16 +1212,18 @@ contains
       do m = 1, cfg%njk
         n4m = N4(config_idx, 1) - N4jk(config_idx, 1, m)
         r4m = R4(config_idx, 1) - R4jk(config_idx, 1, m)
-        if (r4m /= 0.0d0) then
+        ! Relative emptiness test, not an exact zero (JK_DENOM_TOL note)
+        if (abs(r4m) > JK_DENOM_TOL * abs(R4(config_idx, 1))) then
           zeta_m(m) = n4m / r4m
         else
+          r4m = 0.0d0
           zeta_m(m) = 0.0d0
         end if
         disc = zeta_disc_config(b, xi0_all(:, m))
         conn_m(m) = zeta_m(m) - disc
         if (parity) then
           n4om = N4(config_idx, 2) - N4jk(config_idx, 2, m)
-          if (r4m /= 0.0d0) then
+          if (r4m /= 0.0d0) then   ! r4m was zeroed above when empty
             odd_m(m) = n4om / r4m
           else
             odd_m(m) = 0.0d0

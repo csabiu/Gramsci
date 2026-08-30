@@ -34,6 +34,7 @@ module query_4pcf_cl_module
   use csr_cl_module
   use cl_env_module
   use query_4pcf_module, only: write_4pcf_results, write_4pcf_results_noparity, &
+                               write_4pcf_jackknife, &
                                dir_x, dir_y, dir_z, VOL_DEGEN_TOL
   implicit none
   private
@@ -88,12 +89,12 @@ contains
   ! -------------------------------------------------------------------------
   subroutine query_graph_4pcf_cl(istart, iend)
     integer, intent(in) :: istart, iend
-    integer :: nb, ncfg, c, g
-    integer(int64) :: ngang, n_hubs, ncol
-    real(real32), allocatable :: wf(:), hn(:), hr(:), hc(:)
-    real(real64), allocatable :: hacc(:,:)
+    integer :: nb, ncfg, c, g, m
+    integer(int64) :: ngang, n_hubs, ncol, njkcol
+    real(real32), allocatable :: wf(:), hn(:), hr(:), hc(:), hjk(:)
+    real(real64), allocatable :: hacc(:,:), jkacc(:,:)
     integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_w, b_bt6, b_n4, b_r4, kern
-    integer(c_intptr_t) :: b_n4c, b_r4c
+    integer(c_intptr_t) :: b_n4c, b_r4c, b_reg, b_jkn, b_jkr
     real(kdkind) :: acc
 
     if (cfg%rank == 0) print *, 'Performing 4PCF (all configs, OpenCL bsearch)'
@@ -115,6 +116,13 @@ contains
     allocate(hacc(ncol, 2))
     hacc = 0.0d0
 
+    ! Jackknife touching sums, [ncfg x njk] per channel; dummy 1-float
+    ! buffers when off (the kernel signature names them either way).
+    njkcol = max(int(ncfg, int64) * int(cfg%njk, int64), 1_int64)
+    allocate(hjk(njkcol), jkacc(njkcol, 2))
+    hjk = 0.0_real32
+    jkacc = 0.0d0
+
     b_ptr  = cl_buf_in_i64(csr_ptr,  int(size(csr_ptr),int64))
     b_id   = cl_buf_in_i32(csr_id,   csr_total_edges)
     b_dist = cl_buf_in_i8 (csr_dist, csr_total_edges)
@@ -124,6 +132,9 @@ contains
     b_r4   = cl_buf_zeroed_f32(hr, ncol)
     b_n4c  = cl_buf_zeroed_f32(hc, ncol)   ! Kahan compensation of b_n4
     b_r4c  = cl_buf_zeroed_f32(hc, ncol)   ! Kahan compensation of b_r4
+    b_reg  = cl_buf_in_i32(region, n_hubs)
+    b_jkn  = cl_buf_zeroed_f32(hjk, njkcol)
+    b_jkr  = cl_buf_zeroed_f32(hjk, njkcol)
 
     kern = cl_kernel_get('k_4pcf_all')
     call cl_arg_mem(kern, 0, b_ptr)
@@ -141,7 +152,12 @@ contains
     call cl_arg_i32(kern, 12, int(ngang, int32))
     call cl_arg_mem(kern, 17, b_n4c)
     call cl_arg_mem(kern, 18, b_r4c)
-    if (cl_run_complete(kern, 13, 14, 15, 16, ngang)) then
+    call cl_arg_mem(kern, 19, b_reg)
+    call cl_arg_mem(kern, 20, b_jkn)
+    call cl_arg_mem(kern, 21, b_jkr)
+    call cl_arg_i32(kern, 22, cfg%njk)
+    ! With -njk the query always runs bucketed (see query_3pcf_cl_module).
+    if (cfg%njk <= 0 .and. cl_run_complete(kern, 13, 14, 15, 16, ngang)) then
       call cl_read_f32(b_n4, hn, ncol)
       call cl_read_f32(b_r4, hr, ncol)
       hacc(:, 1) = real(hn, real64)
@@ -151,13 +167,24 @@ contains
       call cl_read_f32(b_r4c, hc, ncol)
       hacc(:, 2) = hacc(:, 2) - real(hc, real64)
     else
-      if (cfg%rank == 0) print *, '  single GPU launch hit the watchdog; retrying tiled (slower)'
+      if (cfg%njk > 0) then
+        if (cfg%rank == 0) print *, '  jackknife: tiled launches '// &
+          '(fp32 partials committed to double each window)'
+      else
+        if (cfg%rank == 0) print *, '  single GPU launch hit the watchdog; retrying tiled (slower)'
+      end if
       call cl_write_f32(b_n4, hn, ncol)   ! hn/hr/hc are still all zeros here
       call cl_write_f32(b_r4, hr, ncol)
       call cl_write_f32(b_n4c, hc, ncol)
       call cl_write_f32(b_r4c, hc, ncol)
-      call cl_run_bucketed(kern, 13, 14, 15, 16, ngang, n_hubs, &
-                           [b_n4, b_n4c, b_r4, b_r4c], hacc)
+      if (cfg%njk > 0) then
+        call cl_run_bucketed(kern, 13, 14, 15, 16, ngang, n_hubs, &
+                             [b_n4, b_n4c, b_r4, b_r4c], hacc, &
+                             plainbufs=[b_jkn, b_jkr], plain_acc=jkacc)
+      else
+        call cl_run_bucketed(kern, 13, 14, 15, 16, ngang, n_hubs, &
+                             [b_n4, b_n4c, b_r4, b_r4c], hacc)
+      end if
     end if
 
     do c = 1, ncfg
@@ -173,14 +200,26 @@ contains
       R4(c, 1) = R4(c, 1) + acc
     end do
 
+    ! Jackknife fold into the host arrays write_4pcf_jackknife consumes.
+    if (cfg%njk > 0) then
+      do m = 1, cfg%njk
+        do c = 1, ncfg
+          N4jk(c, 1, m) = N4jk(c, 1, m) + jkacc(int(m-1,int64)*ncfg + c, 1)
+          R4jk(c, 1, m) = R4jk(c, 1, m) + jkacc(int(m-1,int64)*ncfg + c, 2)
+        end do
+      end do
+    end if
+
     call cl_release(b_ptr); call cl_release(b_id); call cl_release(b_dist)
     call cl_release(b_w); call cl_release(b_bt6)
     call cl_release(b_n4); call cl_release(b_r4)
     call cl_release(b_n4c); call cl_release(b_r4c)
+    call cl_release(b_reg); call cl_release(b_jkn); call cl_release(b_jkr)
     call cl_release_kernel(kern)
-    deallocate(wf, hn, hr, hc, hacc)
+    deallocate(wf, hn, hr, hc, hacc, hjk, jkacc)
 
     call write_4pcf_results_noparity()
+    call write_4pcf_jackknife(.false.)
   end subroutine query_graph_4pcf_cl
 
   ! -------------------------------------------------------------------------
@@ -188,16 +227,16 @@ contains
   ! -------------------------------------------------------------------------
   subroutine query_graph_4pcf_parity_cl(istart, iend)
     integer, intent(in) :: istart, iend
-    integer :: nb, ncfg, ndir, c, g
+    integer :: nb, ncfg, ndir, c, g, m
     integer :: p1, p2, p3
-    integer(int64) :: ngang, n_hubs, ncol, idx
-    real(real32), allocatable :: wf(:), hne(:), hno(:), hre(:), hro(:), hc(:)
-    real(real64), allocatable :: hacc(:,:)
+    integer(int64) :: ngang, n_hubs, ncol, idx, njkcol
+    real(real32), allocatable :: wf(:), hne(:), hno(:), hre(:), hro(:), hc(:), hjk(:)
+    real(real64), allocatable :: hacc(:,:), jkacc(:,:)
     integer(int8), allocatable :: signv(:)
     real(kdkind) :: vol, acc
     integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_phi, b_w, b_bt6, b_sgn
     integer(c_intptr_t) :: b_ne, b_no, b_re, b_ro, kern
-    integer(c_intptr_t) :: b_nec, b_noc, b_rec, b_roc
+    integer(c_intptr_t) :: b_nec, b_noc, b_rec, b_roc, b_reg, b_jkn, b_jkr
 
     if (cfg%rank == 0) print *, 'Performing 4PCF parity (all configs, OpenCL bsearch)'
 
@@ -239,6 +278,13 @@ contains
     allocate(hacc(ncol, 4))
     hacc = 0.0d0
 
+    ! Jackknife touching sums, [ncfg x 2ch x njk] in the Fortran N4jk layout;
+    ! dummy 1-float buffers when off.
+    njkcol = max(int(ncfg, int64) * 2_int64 * int(cfg%njk, int64), 1_int64)
+    allocate(hjk(njkcol), jkacc(njkcol, 2))
+    hjk = 0.0_real32
+    jkacc = 0.0d0
+
     b_ptr  = cl_buf_in_i64(csr_ptr,  int(size(csr_ptr),int64))
     b_id   = cl_buf_in_i32(csr_id,   csr_total_edges)
     b_dist = cl_buf_in_i8 (csr_dist, csr_total_edges)
@@ -254,6 +300,9 @@ contains
     b_noc  = cl_buf_zeroed_f32(hc, ncol)   ! partials above, in the same order
     b_rec  = cl_buf_zeroed_f32(hc, ncol)
     b_roc  = cl_buf_zeroed_f32(hc, ncol)
+    b_reg  = cl_buf_in_i32(region, n_hubs)
+    b_jkn  = cl_buf_zeroed_f32(hjk, njkcol)
+    b_jkr  = cl_buf_zeroed_f32(hjk, njkcol)
 
     kern = cl_kernel_get('k_4pcf_parity')
     call cl_arg_mem(kern, 0, b_ptr)
@@ -278,7 +327,12 @@ contains
     call cl_arg_mem(kern, 23, b_noc)
     call cl_arg_mem(kern, 24, b_rec)
     call cl_arg_mem(kern, 25, b_roc)
-    if (cl_run_complete(kern, 18, 19, 20, 21, ngang)) then
+    call cl_arg_mem(kern, 26, b_reg)
+    call cl_arg_mem(kern, 27, b_jkn)
+    call cl_arg_mem(kern, 28, b_jkr)
+    call cl_arg_i32(kern, 29, cfg%njk)
+    ! With -njk the query always runs bucketed (see query_3pcf_cl_module).
+    if (cfg%njk <= 0 .and. cl_run_complete(kern, 18, 19, 20, 21, ngang)) then
       call cl_read_f32(b_ne, hne, ncol)
       call cl_read_f32(b_no, hno, ncol)
       call cl_read_f32(b_re, hre, ncol)
@@ -296,7 +350,12 @@ contains
       call cl_read_f32(b_roc, hc, ncol)
       hacc(:, 4) = hacc(:, 4) - real(hc, real64)
     else
-      if (cfg%rank == 0) print *, '  single GPU launch hit the watchdog; retrying tiled (slower)'
+      if (cfg%njk > 0) then
+        if (cfg%rank == 0) print *, '  jackknife: tiled launches '// &
+          '(fp32 partials committed to double each window)'
+      else
+        if (cfg%rank == 0) print *, '  single GPU launch hit the watchdog; retrying tiled (slower)'
+      end if
       call cl_write_f32(b_ne, hne, ncol)   ! host arrays are still all zeros here
       call cl_write_f32(b_no, hno, ncol)
       call cl_write_f32(b_re, hre, ncol)
@@ -305,8 +364,14 @@ contains
       call cl_write_f32(b_noc, hc, ncol)
       call cl_write_f32(b_rec, hc, ncol)
       call cl_write_f32(b_roc, hc, ncol)
-      call cl_run_bucketed(kern, 18, 19, 20, 21, ngang, n_hubs, &
-                           [b_ne, b_nec, b_no, b_noc, b_re, b_rec, b_ro, b_roc], hacc)
+      if (cfg%njk > 0) then
+        call cl_run_bucketed(kern, 18, 19, 20, 21, ngang, n_hubs, &
+                             [b_ne, b_nec, b_no, b_noc, b_re, b_rec, b_ro, b_roc], hacc, &
+                             plainbufs=[b_jkn, b_jkr], plain_acc=jkacc)
+      else
+        call cl_run_bucketed(kern, 18, 19, 20, 21, ngang, n_hubs, &
+                             [b_ne, b_nec, b_no, b_noc, b_re, b_rec, b_ro, b_roc], hacc)
+      end if
     end if
 
     do c = 1, ncfg
@@ -332,15 +397,30 @@ contains
       R4(c, 2) = R4(c, 2) + acc
     end do
 
+    ! Jackknife fold: the kernel wrote the Fortran N4jk(cfg, ch, region)
+    ! layout, index = c + ncfg*((ch-1) + 2*(m-1)).
+    if (cfg%njk > 0) then
+      do m = 1, cfg%njk
+        do c = 1, ncfg
+          N4jk(c, 1, m) = N4jk(c, 1, m) + jkacc(int(c,int64) + int(ncfg,int64)*(0 + 2*int(m-1,int64)), 1)
+          N4jk(c, 2, m) = N4jk(c, 2, m) + jkacc(int(c,int64) + int(ncfg,int64)*(1 + 2*int(m-1,int64)), 1)
+          R4jk(c, 1, m) = R4jk(c, 1, m) + jkacc(int(c,int64) + int(ncfg,int64)*(0 + 2*int(m-1,int64)), 2)
+          R4jk(c, 2, m) = R4jk(c, 2, m) + jkacc(int(c,int64) + int(ncfg,int64)*(1 + 2*int(m-1,int64)), 2)
+        end do
+      end do
+    end if
+
     call cl_release(b_ptr); call cl_release(b_id); call cl_release(b_dist)
     call cl_release(b_phi); call cl_release(b_w)
     call cl_release(b_bt6); call cl_release(b_sgn)
     call cl_release(b_ne); call cl_release(b_no); call cl_release(b_re); call cl_release(b_ro)
     call cl_release(b_nec); call cl_release(b_noc); call cl_release(b_rec); call cl_release(b_roc)
+    call cl_release(b_reg); call cl_release(b_jkn); call cl_release(b_jkr)
     call cl_release_kernel(kern)
-    deallocate(wf, hne, hno, hre, hro, hc, hacc, signv)
+    deallocate(wf, hne, hno, hre, hro, hc, hacc, hjk, jkacc, signv)
 
     call write_4pcf_results()
+    call write_4pcf_jackknife(.true.)
   end subroutine query_graph_4pcf_parity_cl
 
 end module query_4pcf_cl_module

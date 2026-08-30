@@ -118,9 +118,10 @@ program gramsci_cl
     real(wt1 - wt0, kdkind) / real(wt_rate, kdkind)
 
   call kdtree2_destroy(kd_tree)
-  ! -exactparity with -njk runs the CPU parity kernel below, which needs
-  ! the position snapshot (px/py/pz) that points would otherwise carry.
-  if (cfg%exact_parity .and. cfg%four_pcf_parity .and. cfg%njk > 0) &
+  ! -exactparity always runs the CPU parity kernel below (the OpenCL parity
+  ! kernel is pixel-table based and has no exact-positions path), which
+  ! needs the snapshot (px/py/pz) that points would otherwise carry.
+  if (cfg%exact_parity .and. cfg%four_pcf_parity) &
     call init_exact_parity_positions()
   deallocate(points)
 
@@ -157,11 +158,9 @@ program gramsci_cl
     call query_graph_equilateral_triangle(1, cfg%num_data + cfg%num_rand)
   end if
 
-  ! RSD (anisotropic) 3PCF: GPU version does not support nmu>1, run on CPU
-  ! now.  Same CPU route with -njk (no jackknife in the OpenCL kernel).
-  if (cfg%three_pcf .and. (cfg%RSD .or. cfg%njk > 0)) then
-    if (cfg%rank == 0 .and. cfg%RSD) print *, 'RSD 3PCF: running on CPU'
-    if (cfg%rank == 0 .and. .not. cfg%RSD) print *, '3PCF with -njk: running on CPU'
+  ! RSD (anisotropic) 3PCF: GPU version does not support nmu>1, run on CPU now
+  if (cfg%three_pcf .and. cfg%RSD) then
+    if (cfg%rank == 0) print *, 'RSD 3PCF: running on CPU'
     N2 = 0.0d0
     N3 = 0.0d0
     N2jk = 0.0d0
@@ -190,22 +189,13 @@ program gramsci_cl
     N3 = 0.0d0
   end if
 
-  ! 4PCF with jackknife: run the CPU merge-walk here — after the internal
-  ! 2PCF (whose xi0 the write routines need) and before build_csr (which
-  ! frees the jagged output(:) these kernels walk).
-  if (cfg%four_pcf .and. cfg%njk > 0) then
-    if (cfg%rank == 0) print *, '4PCF with -njk: running on CPU'
-    allocate(N4(cfg%n_configs_4pcf, 1))
-    allocate(R4(cfg%n_configs_4pcf, 1))
-    N4 = 0.0d0 ; R4 = 0.0d0
-    call allocate_4pcf_jk(1)
-    call query_graph_4pcf(1, cfg%num_data + cfg%num_rand)
-    deallocate(N4) ; deallocate(R4)
-    call free_4pcf_jk()
-  end if
-
-  if (cfg%four_pcf_parity .and. cfg%njk > 0) then
-    if (cfg%rank == 0) print *, '4PCF parity with -njk: running on CPU'
+  ! -exactparity 4PCF parity: the OpenCL kernel looks the chirality up in a
+  ! host-built PIXEL table and has no exact-positions path, so this case runs
+  ! the CPU merge-walk (with jackknife when -njk is set).  Placed after the
+  ! internal 2PCF (whose xi0 the write routines need) and before build_csr
+  ! (which frees the jagged output(:) the CPU kernel walks).
+  if (cfg%four_pcf_parity .and. cfg%exact_parity) then
+    if (cfg%rank == 0) print *, '4PCF parity with -exactparity: running on CPU'
     call init_direction_lookup()
     allocate(N4(cfg%n_configs_4pcf, 2))
     allocate(R4(cfg%n_configs_4pcf, 2))
@@ -222,11 +212,15 @@ program gramsci_cl
   if (cfg%rank == 0) print *, 'Jagged graph freed; using CSR from here'
 
   ! ---- Phase 2: GPU (OpenCL) queries using CSR ----
-  ! (-njk cases already ran on the CPU in phase 1: no jackknife in the
-  ! OpenCL kernels)
-  if (cfg%three_pcf .and. .not. cfg%RSD .and. cfg%njk <= 0) then
+  ! The 3PCF/4PCF/4PCFp kernels accumulate the jackknife touching sums on
+  ! the device (CAS float atomics, committed to double each bucketed
+  ! window), so -njk stays on the GPU; only the equilateral -njk case and
+  ! -exactparity ran on the CPU above.
+  if (cfg%three_pcf .and. .not. cfg%RSD) then
     N2 = 0.0d0
     N3 = 0.0d0
+    N2jk = 0.0d0
+    N3jk = 0.0d0
     call query_graph_3pcf_cl(1, cfg%num_data + cfg%num_rand)
   end if
 
@@ -236,21 +230,25 @@ program gramsci_cl
     call query_graph_equilateral_cl(1, cfg%num_data + cfg%num_rand)
   end if
 
-  if (cfg%four_pcf .and. cfg%njk <= 0) then
+  if (cfg%four_pcf) then
     allocate(N4(cfg%n_configs_4pcf, 1))
     allocate(R4(cfg%n_configs_4pcf, 1))
     N4 = 0.0d0 ; R4 = 0.0d0
+    call allocate_4pcf_jk(1)
     call query_graph_4pcf_cl(1, cfg%num_data + cfg%num_rand)
     deallocate(N4) ; deallocate(R4)
+    call free_4pcf_jk()
   end if
 
-  if (cfg%four_pcf_parity .and. cfg%njk <= 0) then
+  if (cfg%four_pcf_parity .and. .not. cfg%exact_parity) then
     call init_direction_lookup()
     allocate(N4(cfg%n_configs_4pcf, 2))
     allocate(R4(cfg%n_configs_4pcf, 2))
     N4 = 0.0d0 ; R4 = 0.0d0
+    call allocate_4pcf_jk(2)
     call query_graph_4pcf_parity_cl(1, cfg%num_data + cfg%num_rand)
     deallocate(N4) ; deallocate(R4)
+    call free_4pcf_jk()
     call cleanup_direction_lookup()
   end if
 

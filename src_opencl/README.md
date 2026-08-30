@@ -46,12 +46,26 @@ Input catalogs are 4-column ASCII (`x y z weight`, comoving Mpc/h).
 | Mode      | Execution                                            |
 |-----------|------------------------------------------------------|
 | `-2pcf`   | CPU (O(edges); not worth GPU offload)                |
-| `-3pcf`   | GPU (isotropic); CPU fallback when `-nmu` > 1 (RSD)  |
-| `-equi`   | GPU (isotropic); CPU fallback when `-nmu` > 1        |
-| `-4pcf`   | GPU                                                  |
-| `-4pcfp`  | GPU (parity decomposition)                           |
+| `-3pcf`   | GPU (isotropic, incl. `-njk`); CPU fallback when `-nmu` > 1 (RSD) |
+| `-equi`   | GPU (isotropic); CPU fallback when `-nmu` > 1 or `-njk` > 0 |
+| `-4pcf`   | GPU (incl. `-njk`)                                   |
+| `-4pcfp`  | GPU (parity, incl. `-njk`); CPU fallback for `-exactparity` |
 
 Graph construction (kd-tree pair finding) always runs on the CPU with OpenMP.
+
+**Jackknife (`-njk`)** runs on the GPU for the isotropic 3PCF and both 4PCF
+modes.  Apple's OpenCL has no float atomics, so the per-region touching sums
+are accumulated with **CAS-emulated float atomic adds** into shared device
+buffers laid out to match the host `N2jk`/`N4jk` arrays.  Those buffers get
+no Kahan compensation (an atomic pair update is impossible), so with `-njk`
+the query always runs through the **tiled/bucketed launcher**: every window's
+fp32 partials are committed into double host accumulators and re-zeroed on
+the device, which bounds the fp32 error per slot to a single window's worth
+of tuples (same mechanism that protects against the watchdog).  Measured
+CPU-vs-OpenCL agreement of all jackknife sidecars: ~2e-5 relative-to-peak.
+`-exactparity` (any `-njk`) runs the CPU parity kernel: the OpenCL parity
+chirality is looked up from the host-built pixel table and has no
+exact-positions path.
 
 ## Precision (important)
 

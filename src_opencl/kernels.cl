@@ -39,6 +39,24 @@ inline void kadd(__global float *sum, __global float *comp, long idx, float val)
     sum[idx]  = t;
 }
 
+/* CAS-emulated float atomic add (Apple OpenCL 1.2 has integer atomics only,
+ * atomic_cmpxchg on 32-bit ints being core since 1.1).  Used ONLY for the
+ * jackknife touching sums: their fp32 precision is protected by the host,
+ * which commits and re-zeros the buffers after every bucketed window
+ * (cl_run_bucketed), so a single window's per-slot sum stays far below the
+ * ~2/eps saturation that motivates kadd for the full-run channels.  With
+ * -njk the query always runs bucketed for exactly this reason. */
+inline void atomic_fadd(volatile __global float *p, float v)
+{
+    if (v == 0.0f) return;
+    volatile __global uint *up = (volatile __global uint *)p;
+    uint old = *up, assumed;
+    do {
+        assumed = old;
+        old = atomic_cmpxchg(up, assumed, as_uint(as_float(assumed) + v));
+    } while (old != assumed);
+}
+
 /* Binary search node `from`'s sorted adjacency row for neighbor `to`.
  * Returns the distance-bin (1..nbins) or 0 if the edge is absent.
  * `long` indexing throughout: edge counts may exceed 2^31. */
@@ -82,7 +100,11 @@ __kernel void k_3pcf_all(__global const long  *ptr,
                          const int nbuckets, const int blo, const int bhi,
                          __global char *done_flag,
                          __global float *comp_nnn,
-                         __global float *comp_rrr)
+                         __global float *comp_rrr,
+                         __global const int   *region, /* jackknife labels, 1..njk */
+                         __global float       *jkn,    /* touching sums, [cb x njk] */
+                         __global float       *jkr,
+                         const int njk)
 {
     int g = (int)get_global_id(0);
     long gcol = (long)g * cb;
@@ -100,11 +122,13 @@ __kernel void k_3pcf_all(__global const long  *ptr,
         int  nn = (int)(ptr[i] - s);
         if (nn < 2) continue;
         long b0 = s - 1;
+        int jr1 = (njk > 0) ? region[i - 1] : 0;
 
         for (int k1 = 1; k1 <= nn; k1++) {
             char c1 = dist[b0 + k1 - 1];
             int  n1 = id  [b0 + k1 - 1];
             float wi_w1 = w[i - 1] * w[n1 - 1];
+            int jr2 = (njk > 0) ? region[n1 - 1] : 0;
 
             for (int k2 = k1 + 1; k2 <= nn; k2++) {
                 char c2 = dist[b0 + k2 - 1];
@@ -115,10 +139,30 @@ __kernel void k_3pcf_all(__global const long  *ptr,
 
                 int bin = bt3[(c1 - 1) + nbins * ((c2 - 1) + nbins * (c3 - 1))];
                 float w3 = wi_w1 * w[n2 - 1];
+                int rrr = (i > num_data && n1 > num_data && n2 > num_data);
 
                 kadd(part_nnn, comp_nnn, gcol + bin - 1, w3);
-                if (i > num_data && n1 > num_data && n2 > num_data)
+                if (rrr)
                     kadd(part_rrr, comp_rrr, gcol + bin - 1, -w3);
+
+                /* Jackknife: count this triplet once per DISTINCT region it
+                 * touches (unrolled dedup, matching the CPU/OpenACC kernels).
+                 * RRR carries the minus sign, like part_rrr above. */
+                if (njk > 0) {
+                    int jr3 = region[n2 - 1];
+                    if (jr1 > 0) {
+                        atomic_fadd(&jkn[(bin - 1) + (long)cb * (jr1 - 1)], w3);
+                        if (rrr) atomic_fadd(&jkr[(bin - 1) + (long)cb * (jr1 - 1)], -w3);
+                    }
+                    if (jr2 > 0 && jr2 != jr1) {
+                        atomic_fadd(&jkn[(bin - 1) + (long)cb * (jr2 - 1)], w3);
+                        if (rrr) atomic_fadd(&jkr[(bin - 1) + (long)cb * (jr2 - 1)], -w3);
+                    }
+                    if (jr3 > 0 && jr3 != jr1 && jr3 != jr2) {
+                        atomic_fadd(&jkn[(bin - 1) + (long)cb * (jr3 - 1)], w3);
+                        if (rrr) atomic_fadd(&jkr[(bin - 1) + (long)cb * (jr3 - 1)], -w3);
+                    }
+                }
             }
         }
     }
@@ -212,7 +256,11 @@ __kernel void k_4pcf_all(__global const long  *ptr,
                          const int nbuckets, const int blo, const int bhi,
                          __global char *done_flag,
                          __global float *comp_n4,
-                         __global float *comp_r4)
+                         __global float *comp_r4,
+                         __global const int   *region, /* jackknife labels, 1..njk */
+                         __global float       *jkn,    /* touching sums, [ncfg x njk] */
+                         __global float       *jkr,
+                         const int njk)
 {
     int  g    = (int)get_global_id(0);
     long gcol = (long)g * ncfg;
@@ -231,10 +279,12 @@ __kernel void k_4pcf_all(__global const long  *ptr,
         int  nn = (int)(ptr[i] - s);
         if (nn <= 2) continue;
         long b0 = s - 1;
+        int jr1 = (njk > 0) ? region[i - 1] : 0;
 
         for (int k1 = 1; k1 <= nn; k1++) {
             char c1 = dist[b0 + k1 - 1];
             int  n1 = id  [b0 + k1 - 1];
+            int jr2 = (njk > 0) ? region[n1 - 1] : 0;
 
             for (int k2 = k1 + 1; k2 <= nn; k2++) {
                 int  n2 = id[b0 + k2 - 1];
@@ -243,6 +293,7 @@ __kernel void k_4pcf_all(__global const long  *ptr,
                 char c2 = dist[b0 + k2 - 1];
                 float w12 = w[i - 1] * w[n1 - 1] * w[n2 - 1];
                 int rand12 = (i > num_data && n1 > num_data && n2 > num_data);
+                int jr3 = (njk > 0) ? region[n2 - 1] : 0;
 
                 for (int k3 = k2 + 1; k3 <= nn; k3++) {
                     int  n3 = id[b0 + k3 - 1];
@@ -258,9 +309,33 @@ __kernel void k_4pcf_all(__global const long  *ptr,
                     if (cfgidx == 0) continue;
 
                     float w4 = w12 * w[n3 - 1];
+                    int isr = (rand12 && n3 > num_data);
                     kadd(part_n4, comp_n4, gcol + cfgidx - 1, w4);
-                    if (rand12 && n3 > num_data)
+                    if (isr)
                         kadd(part_r4, comp_r4, gcol + cfgidx - 1, w4);
+
+                    /* Jackknife: once per DISTINCT region touched (RRRR is
+                     * accumulated with PLUS, matching the CPU convention). */
+                    if (njk > 0) {
+                        int jr4 = region[n3 - 1];
+                        long jb = (long)(cfgidx - 1);
+                        if (jr1 > 0) {
+                            atomic_fadd(&jkn[jb + (long)ncfg * (jr1 - 1)], w4);
+                            if (isr) atomic_fadd(&jkr[jb + (long)ncfg * (jr1 - 1)], w4);
+                        }
+                        if (jr2 > 0 && jr2 != jr1) {
+                            atomic_fadd(&jkn[jb + (long)ncfg * (jr2 - 1)], w4);
+                            if (isr) atomic_fadd(&jkr[jb + (long)ncfg * (jr2 - 1)], w4);
+                        }
+                        if (jr3 > 0 && jr3 != jr1 && jr3 != jr2) {
+                            atomic_fadd(&jkn[jb + (long)ncfg * (jr3 - 1)], w4);
+                            if (isr) atomic_fadd(&jkr[jb + (long)ncfg * (jr3 - 1)], w4);
+                        }
+                        if (jr4 > 0 && jr4 != jr1 && jr4 != jr2 && jr4 != jr3) {
+                            atomic_fadd(&jkn[jb + (long)ncfg * (jr4 - 1)], w4);
+                            if (isr) atomic_fadd(&jkr[jb + (long)ncfg * (jr4 - 1)], w4);
+                        }
+                    }
                 }
             }
         }
@@ -294,7 +369,11 @@ __kernel void k_4pcf_parity(__global const long  *ptr,
                          __global float *cn_even,
                          __global float *cn_odd,
                          __global float *cr_even,
-                         __global float *cr_odd)
+                         __global float *cr_odd,
+                         __global const int   *region, /* jackknife labels, 1..njk */
+                         __global float       *jkn,    /* [ncfg x 2ch x njk], Fortran N4jk layout */
+                         __global float       *jkr,
+                         const int njk)
 {
     int  g    = (int)get_global_id(0);
     long gcol = (long)g * ncfg;
@@ -313,11 +392,13 @@ __kernel void k_4pcf_parity(__global const long  *ptr,
         int  nn = (int)(ptr[i] - s);
         if (nn <= 2) continue;
         long b0 = s - 1;
+        int jr1 = (njk > 0) ? region[i - 1] : 0;
 
         for (int k1 = 1; k1 <= nn; k1++) {
             char c1 = dist[b0 + k1 - 1];
             int  n1 = id  [b0 + k1 - 1];
             int  p1 = (int)phi[b0 + k1 - 1];
+            int jr2 = (njk > 0) ? region[n1 - 1] : 0;
 
             for (int k2 = k1 + 1; k2 <= nn; k2++) {
                 int  n2 = id[b0 + k2 - 1];
@@ -327,6 +408,7 @@ __kernel void k_4pcf_parity(__global const long  *ptr,
                 int  p2 = (int)phi[b0 + k2 - 1];
                 float w12 = w[i - 1] * w[n1 - 1] * w[n2 - 1];
                 int rand12 = (i > num_data && n1 > num_data && n2 > num_data);
+                int jr3 = (njk > 0) ? region[n2 - 1] : 0;
 
                 for (int k3 = k2 + 1; k3 <= nn; k3++) {
                     int  n3 = id[b0 + k3 - 1];
@@ -349,12 +431,49 @@ __kernel void k_4pcf_parity(__global const long  *ptr,
 
                     float w4 = w12 * w[n3 - 1];
                     float w4o = (float)(pflip * sgn) * w4;
+                    int isr = (rand12 && n3 > num_data);
 
                     kadd(pn_even, cn_even, gcol + cfgidx - 1, w4);
                     kadd(pn_odd,  cn_odd,  gcol + cfgidx - 1, w4o);
-                    if (rand12 && n3 > num_data) {
+                    if (isr) {
                         kadd(pr_even, cr_even, gcol + cfgidx - 1, w4);
                         kadd(pr_odd,  cr_odd,  gcol + cfgidx - 1, w4o);
+                    }
+
+                    /* Jackknife: once per DISTINCT region touched; even and
+                     * odd channels laid out as Fortran N4jk(cfg, ch, region):
+                     * index = (cfg-1) + ncfg*((ch-1) + 2*(region-1)). */
+                    if (njk > 0) {
+                        int jr4 = region[n3 - 1];
+                        long jb = (long)(cfgidx - 1);
+                        if (jr1 > 0) {
+                            long je = jb + (long)ncfg * 2 * (jr1 - 1);
+                            atomic_fadd(&jkn[je], w4);
+                            atomic_fadd(&jkn[je + ncfg], w4o);
+                            if (isr) { atomic_fadd(&jkr[je], w4);
+                                       atomic_fadd(&jkr[je + ncfg], w4o); }
+                        }
+                        if (jr2 > 0 && jr2 != jr1) {
+                            long je = jb + (long)ncfg * 2 * (jr2 - 1);
+                            atomic_fadd(&jkn[je], w4);
+                            atomic_fadd(&jkn[je + ncfg], w4o);
+                            if (isr) { atomic_fadd(&jkr[je], w4);
+                                       atomic_fadd(&jkr[je + ncfg], w4o); }
+                        }
+                        if (jr3 > 0 && jr3 != jr1 && jr3 != jr2) {
+                            long je = jb + (long)ncfg * 2 * (jr3 - 1);
+                            atomic_fadd(&jkn[je], w4);
+                            atomic_fadd(&jkn[je + ncfg], w4o);
+                            if (isr) { atomic_fadd(&jkr[je], w4);
+                                       atomic_fadd(&jkr[je + ncfg], w4o); }
+                        }
+                        if (jr4 > 0 && jr4 != jr1 && jr4 != jr2 && jr4 != jr3) {
+                            long je = jb + (long)ncfg * 2 * (jr4 - 1);
+                            atomic_fadd(&jkn[je], w4);
+                            atomic_fadd(&jkn[je + ncfg], w4o);
+                            if (isr) { atomic_fadd(&jkr[je], w4);
+                                       atomic_fadd(&jkr[je + ncfg], w4o); }
+                        }
                     }
                 }
             }

@@ -33,6 +33,35 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
   `bintable6` fill and `-exactparity` chirality signs) and by a
   combined-vs-single-mode identity test.
 
+### Added (OpenCL GPU jackknife)
+- **The OpenCL (Mac/portable) build now runs `-njk` on the GPU** for the
+  isotropic 3PCF, 4PCF and parity 4PCF (previously all jackknife queries
+  routed to the CPU).  Apple OpenCL has no float atomics, so the
+  per-region touching sums use **CAS-emulated float atomic adds**
+  (`atomic_cmpxchg` loops) into shared device buffers laid out to match
+  the host `N2jk`/`N4jk` arrays.  fp32 precision is protected by forcing
+  the tiled/bucketed launcher whenever `-njk` is set: `cl_run_bucketed`
+  gains an optional plain-buffer list that rides the existing
+  commit-to-double/re-zero cycle, so each fp32 slot only ever accumulates
+  one window's worth of tuples (the same machinery that guards against
+  the GPU watchdog).  Kernel arguments are appended, so no indices shift.
+  A first exact-zero-guard failure surfaced during validation — a
+  delete-one denominator that cancels exactly on the CPU leaves fp32 dust
+  on the GPU and the division exploded — fixed for all backends by a
+  relative emptiness threshold (`JK_DENOM_TOL = 1e-4` of the total random
+  count) in every jackknife writer; this also covers last-ulp dust from
+  the OpenACC fp64 atomics.  Validated on an Apple M1:
+  `src_opencl/validate.sh` gains four jackknife comparisons (3PCF/4PCF/
+  4PCFp plus a `GRAMSCI_CL_TARGET_SEC=0.02` commit-cycle stress run) and
+  passes 9/9; all jackknife sidecars agree with the double-precision CPU
+  at ~2e-5 relative-to-peak; equilateral `-njk` stays on the cheap CPU
+  fallback.
+- **`-exactparity` on the OpenCL build now routes to the CPU parity
+  kernel** (with jackknife when requested).  Previously it silently ran
+  the pixel-table GPU kernel against a dummy 1-element `csr_phi` — the
+  exact-positions path simply does not exist in OpenCL — producing
+  corrupted parity output with no warning.
+
 ### Added (GPU jackknife for the 4PCF)
 - **The OpenACC build now runs `-njk` on the GPU for `-4pcf` and `-4pcfp`**
   (previously routed to the CPU merge-walk, sacrificing the GPU speedup
