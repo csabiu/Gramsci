@@ -19,14 +19,22 @@ program Ngramsci_gpu
   integer :: i, j, thread, threads
   real(kdkind) :: start, finish
   integer(8) :: wt0, wt1, wt_rate
+  ! Wall-clock stage stamps ([t=...s] lines): the graph build and query
+  ! have their own timers, but the untimed stages (catalogue parsing,
+  ! KD-tree build/destroy, teardown) are where runtime-allocator overhead
+  ! hides -- observed as an ~18 s mprotect storm under the nvfortran RTL.
+  integer(8) :: t_stamp0, t_stamp_rate
 
   thread = 0
   threads = 1
+
+  call system_clock(t_stamp0, t_stamp_rate)
 
   ! ---- Configuration ----
   call default_params()
   cfg%backend = 'openacc'
   call parseOptions()
+  call stamp('options parsed')
 
   cfg%config_bins = cfg%nbins
   call create_binlookup()
@@ -60,11 +68,14 @@ program Ngramsci_gpu
   end do
 
   ! ---- Read data ----
+  call stamp('catalogue count done; reading')
   call read_files_2()
+  call stamp('catalogue read')
 
   ! ---- Build KD-tree ----
   if (cfg%rank == 0) print *, 'building kd_tree '
   kd_tree => kdtree2_create(points, sort=.true., rearrange=.true.)
+  call stamp('kd-tree built')
 
   if (cfg%rank == 0) print *, 'allocating arrays '
   call read_jk_regions()
@@ -110,6 +121,7 @@ program Ngramsci_gpu
     real(wt1 - wt0, kdkind) / real(wt_rate, kdkind)
 
   call kdtree2_destroy(kd_tree)
+  call stamp('kd-tree destroyed')
   if (cfg%exact_parity .and. cfg%four_pcf_parity) &
     call init_exact_parity_positions()
   deallocate(points)
@@ -239,7 +251,20 @@ program Ngramsci_gpu
   if (cfg%rank == 0) print *, 'finished querying the graph'
 
   call deallocate_arrays()
+  call stamp('teardown done')
 
   print *, "Exit... stage left!"
+
+contains
+
+  ! Elapsed wall time since program start, printed at stage boundaries.
+  subroutine stamp(label)
+    character(len=*), intent(in) :: label
+    integer(8) :: t_now
+    if (cfg%rank /= 0) return
+    call system_clock(t_now)
+    print '("[t=",f8.2," s] ",a)', &
+      real(t_now - t_stamp0, kdkind) / real(t_stamp_rate, kdkind), label
+  end subroutine stamp
 
 end program Ngramsci_gpu
