@@ -47,29 +47,53 @@ Input catalogs are 4-column ASCII (`x y z weight`, comoving Mpc/h).
 | `-4pcfp`  | GPU (parity decomposition, incl. `-njk`)    |
 
 **Jackknife (`-njk`)** runs on the GPU for the isotropic 3PCF and both 4PCF
-modes.  The 3PCF uses slot-strided `(bin, slot, region)` partials; the 4PCF
-kernels instead update device copies of the host `N4jk`/`R4jk` arrays with
-direct `ATOMIC UPDATE`s — no slot or gang dimension, because at 4PCF
-configuration counts a slotted layout would need terabytes, while direct
-atomics scatter over `n_configs × njk` entries so collisions are rare.  The
-accumulators (2 × n_configs × channels × njk × 8 B) stay resident for the
-whole query and are charged against the gang and edge-window budgets, with
-a hard error if they would exceed half the free device memory (reduce
-`-njk` or `-nbins`).  `validate.sh` compares every jackknife sidecar
-(`.jk`, `.jkerr`, `.jkcov`, `.jkcov_odd`) against the CPU reference in both
-single-pass and forced-chunked modes.
+modes.  The 3PCF uses slot-strided `(bin, slot, region)` partials.  The 4PCF
+kernels split the per-region touching sums `N4jk`/`R4jk` in two
+(`jk_gang_layout` in `query_4pcf_gpu_module.F90`):
 
-Measured jackknife overhead (RTX 3090 Ti, tests catalogue, `-rmin 10
--rmax 30 -nbins 3`, "Querying graph took" times, best of 3):
+- **Hub-region term (the bulk):** hubs are permuted so that each region's
+  hubs are contiguous and the gangs are split into one contiguous group per
+  region, sized in proportion to the region's hub count.  A gang therefore
+  only ever processes hubs of a single region, so its ordinary per-gang
+  partials `part_n4(:, ig)` *are* that region's hub-term contribution and
+  are added into `N4jk` on the host after the kernel — no device atomic at
+  all for the dominant contribution.
+- **Neighbour-region terms:** the three neighbours' regions, when they
+  differ from the hub's, get direct `ATOMIC UPDATE`s into device copies of
+  `N4jk`/`R4jk` (no slot or gang dimension — at 4PCF configuration counts a
+  slotted layout would need terabytes, and boundary quadruplets are rare).
+  Only hubs whose adjacency list crosses a region boundary ("mixed" hubs,
+  flagged during the Phase 1 connectivity build) run this block at all;
+  interior hubs skip it.  The fraction of mixed hubs is printed at start-up
+  (≈19% for the tests catalogue at `-rmax 60`).
 
-| mode    | no-jk   | `-njk 8` | overhead | `-njk 8` chunked (`WIN_EDGES=5e6`) |
-|---------|---------|----------|----------|------------------------------------|
-| 3PCF    | 0.549 s | 0.575 s  | +5%      | 0.669 s (+22%)                     |
-| 4PCF    | 0.656 s | 0.717 s  | +9%      | 1.048 s (+60%)                     |
-| 4PCFp   | 0.941 s | 0.974 s  | +4%      | 1.397 s (+48%)                     |
+If there are more regions than gangs can be split over (`njk` > gangs/4)
+the layout falls back to a single gang group and the hub term is done with
+atomics too.  The accumulators (2 × n_configs × channels × njk × 8 B) stay
+resident for the whole query and are charged against the gang and
+edge-window budgets, with a hard error if they would exceed half the free
+device memory (reduce `-njk` or `-nbins`).  `validate.sh` compares every
+jackknife sidecar (`.jk`, `.jkerr`, `.jkcov`, `.jkcov_odd`) against the CPU
+reference in both single-pass and forced-chunked modes.
 
-Single-pass jackknife is nearly free; the chunked premium is the usual
-window re-walk cost, not the jackknife atomics.
+Measured jackknife overhead (RTX 3090 Ti, tests catalogue, `-nbins 3`,
+"Querying graph took" times).  At the default `-rmax 30` every 4PCF kernel
+runs in well under a second and the numbers are all fixed cost; `-rmax 60`
+gives the kernels real work (the CPU reference needs ~1000 s on 64 threads
+for `-4pcf -njk 8`):
+
+| mode, `-rmax 60`  | no-jk   | `-njk 8` | overhead | previous scheme (direct atomics) |
+|-------------------|---------|----------|----------|----------------------------------|
+| 4PCF single-pass  | 19.4 s  | 20.6 s   | +6%      | 39.1 s (+111%)                   |
+| 4PCFp single-pass |  45.5 s | 45.6 s   | +0.2%    | 55.8 s (+25%)                    |
+| 4PCF chunked (`WIN_EDGES=5e6`)  | 75.3 s | 82.8 s | +10% | 91.3 s (+27%)              |
+| 4PCFp chunked (`WIN_EDGES=5e6`) | 111.8 s | 121.7 s | +9% | 126.7 s (+15%)            |
+
+The 3PCF (slot-strided partials) costs +9% at `-rmax 60` and +14% at
+`-rmax 100`.  In chunked mode the gang layout is recomputed per hub window
+(the catalogue order follows sky position, so a single global layout left
+most region groups idle on any one window); the `cw1 → hub window → cw2`
+tile order this needs costs ≈1.5% on the no-jk chunked kernel.
 
 Graph construction (kd-tree pair finding) always runs on the CPU with OpenMP
 and typically takes a small fraction of the total runtime.

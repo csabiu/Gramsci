@@ -5,6 +5,28 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
 
 ## [Unreleased]
 
+### Changed (OpenACC 4PCF jackknife)
+- **The OpenACC 4PCF / parity-4PCF jackknife no longer does a device atomic
+  per quadruplet into the shared `N4jk`/`R4jk` arrays.**  Those arrays have
+  only `n_configs × njk` entries, so with thousands of gangs the direct
+  atomics serialised in L2 and `-njk` doubled the 4PCF kernel time once the
+  kernel had real work (`-rmax 60`: +111% for `-4pcf`, +25% for `-4pcfp`).
+  Hubs are now permuted by region and the gangs split into per-region
+  groups (`jk_gang_layout`), so a gang only ever sees hubs of one region
+  and its existing per-gang partials *are* the hub-region touching sum,
+  added on the host.  Only the neighbour regions that differ from the hub's
+  still use atomics, and only for hubs whose adjacency list crosses a
+  region boundary (flagged in Phase 1; interior hubs skip the jackknife
+  block entirely).  Falls back to the previous direct-atomic hub term when
+  `njk` exceeds gangs/4.  The chunked kernels recompute the layout per hub
+  window (tile order is now `cw1 → hub window → cw2`, with the per-gang
+  partials folded on the host per window), because catalogue order follows
+  sky position and a global layout left most region groups idle on any one
+  window.  Results are unchanged (validate.sh 9/9 at 1e-8, `-rmax 60`
+  single-pass and chunked outputs bit-identical to the CPU, plus region-0
+  label and fallback cross-checks); `-njk` overhead at `-rmax 60` drops to
+  +6% (`-4pcf`) and <1% (`-4pcfp`) single-pass, +10% / +9% chunked.
+
 ### Added
 - **Delete-one jackknife errors for every statistic** — `-2pcf`, `-3pcf`,
   `-equi`, `-4pcf` and the parity-odd `-4pcfp` (previously 3PCF-only).
