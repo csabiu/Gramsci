@@ -59,6 +59,18 @@ a hard error if they would exceed half the free device memory (reduce
 (`.jk`, `.jkerr`, `.jkcov`, `.jkcov_odd`) against the CPU reference in both
 single-pass and forced-chunked modes.
 
+Measured jackknife overhead (RTX 3090 Ti, tests catalogue, `-rmin 10
+-rmax 30 -nbins 3`, "Querying graph took" times, best of 3):
+
+| mode    | no-jk   | `-njk 8` | overhead | `-njk 8` chunked (`WIN_EDGES=5e6`) |
+|---------|---------|----------|----------|------------------------------------|
+| 3PCF    | 0.549 s | 0.575 s  | +5%      | 0.669 s (+22%)                     |
+| 4PCF    | 0.656 s | 0.717 s  | +9%      | 1.048 s (+60%)                     |
+| 4PCFp   | 0.941 s | 0.974 s  | +4%      | 1.397 s (+48%)                     |
+
+Single-pass jackknife is nearly free; the chunked premium is the usual
+window re-walk cost, not the jackknife atomics.
+
 Graph construction (kd-tree pair finding) always runs on the CPU with OpenMP
 and typically takes a small fraction of the total runtime.
 
