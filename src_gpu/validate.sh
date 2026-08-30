@@ -31,8 +31,12 @@ if [[ ! -f "$GAL" ]]; then
   RAN="$(dirname "$0")/../example/test.ran"
 fi
 
-if [[ ! -x "$CPU_BIN" ]]; then echo "ERROR: $CPU_BIN not found"; exit 1; fi
-if [[ ! -x "$GPU_BIN" ]]; then echo "ERROR: $GPU_BIN not found"; exit 1; fi
+if [[ ! -x "$CPU_BIN" ]]; then
+  echo "ERROR: $CPU_BIN not found (build with: make all, from the repo root)"; exit 1
+fi
+if [[ ! -x "$GPU_BIN" ]]; then
+  echo "ERROR: $GPU_BIN not found (build with: make cuda, needs nvfortran)"; exit 1
+fi
 if [[ ! -f "$GAL" ]];     then echo "ERROR: $GAL not found";     exit 1; fi
 if [[ ! -f "$RAN" ]];     then echo "ERROR: $RAN not found";     exit 1; fi
 
