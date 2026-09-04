@@ -17,6 +17,7 @@ program Ngramsci_gpu
 
   type(kdtree2), pointer :: kd_tree
   integer :: i, j, thread, threads
+  integer :: istart, iend
   real(kdkind) :: start, finish
   integer(8) :: wt0, wt1, wt_rate
   ! Wall-clock stage stamps ([t=...s] lines): the graph build and query
@@ -193,8 +194,19 @@ program Ngramsci_gpu
   ! ---- Flatten graph to CSR ----
   ! build_csr frees each jagged row as it copies (and deallocates output),
   ! keeping peak host RAM at ~one graph copy.  All subsequent kernels use CSR.
-  call build_csr()
-  if (cfg%rank == 0) print *, 'Jagged graph freed; using CSR from here'
+  ! -merge runs no kernel (the raw sums come from the shard files), so the
+  ! CSR is skipped and the jagged graph -- still needed above for the
+  ! internal 2PCF -- is released here instead.
+  if (cfg%merge_n > 0) then
+    do i = 1, cfg%num_data + cfg%num_rand
+      call output(i)%destroy()
+    end do
+    deallocate(output)
+    if (cfg%rank == 0) print *, 'Jagged graph freed; -merge: no CSR, no GPU query'
+  else
+    call build_csr()
+    if (cfg%rank == 0) print *, 'Jagged graph freed; using CSR from here'
+  end if
 
   ! ---- Phase 2: GPU queries using CSR ----
 
@@ -223,7 +235,13 @@ program Ngramsci_gpu
     allocate(R4(cfg%n_configs_4pcf, 1))
     N4 = 0.0d0 ; R4 = 0.0d0
     call allocate_4pcf_jk(1)
-    call query_graph_4pcf_gpu(1, cfg%num_data + cfg%num_rand)
+    if (cfg%merge_n > 0) then
+      call merge_4pcf_shards(.false.)
+      call finish_4pcf_output(.false., 1, cfg%num_data + cfg%num_rand)
+    else
+      call query_hub_range(istart, iend)
+      call query_graph_4pcf_gpu(istart, iend)
+    end if
     deallocate(N4) ; deallocate(R4)
     call free_4pcf_jk()
   end if
@@ -234,7 +252,13 @@ program Ngramsci_gpu
     allocate(R4(cfg%n_configs_4pcf, 2))
     N4 = 0.0d0 ; R4 = 0.0d0
     call allocate_4pcf_jk(2)
-    call query_graph_4pcf_parity_gpu(1, cfg%num_data + cfg%num_rand)
+    if (cfg%merge_n > 0) then
+      call merge_4pcf_shards(.true.)
+      call finish_4pcf_output(.true., 1, cfg%num_data + cfg%num_rand)
+    else
+      call query_hub_range(istart, iend)
+      call query_graph_4pcf_parity_gpu(istart, iend)
+    end if
     deallocate(N4) ; deallocate(R4)
     call free_4pcf_jk()
     call cleanup_direction_lookup()
@@ -256,6 +280,18 @@ program Ngramsci_gpu
   print *, "Exit... stage left!"
 
 contains
+
+  ! Hub range queried by this process: the whole catalogue, or under
+  ! -shard k/n the k-th cost-balanced slice of the CSR rows.
+  subroutine query_hub_range(istart, iend)
+    integer, intent(out) :: istart, iend
+    if (cfg%shard_n > 0) then
+      call csr_shard_range(cfg%shard_k, cfg%shard_n, istart, iend)
+    else
+      istart = 1
+      iend = cfg%num_data + cfg%num_rand
+    end if
+  end subroutine query_hub_range
 
   ! Elapsed wall time since program start, printed at stage boundaries.
   subroutine stamp(label)

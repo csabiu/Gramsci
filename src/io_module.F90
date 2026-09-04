@@ -362,7 +362,9 @@ contains
 
     ! Persist the labels in the -jkgal/-jkran input format, so the exact
     ! partition can be re-used (or inspected) with external label files.
-    if (cfg%rank == cfg%master) then
+    ! Under -shard only shard 1 writes them: every shard derives the same
+    ! partition, and concurrent writers would race on one file.
+    if (cfg%rank == cfg%master .and. cfg%shard_k <= 1) then
       open(newunit=unit_num, file=trim(cfg%output_file)//'.jkgal', status='unknown')
       do i = 1, cfg%num_data
         write(unit_num, '(i0)') region(i)

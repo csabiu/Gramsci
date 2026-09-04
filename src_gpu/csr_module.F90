@@ -301,6 +301,64 @@ contains
     end do
   end subroutine csr_make_splits
 
+  ! -shard k/n: the contiguous hub range [istart, iend] of shard k, cut on
+  ! the cumulative per-hub cost nn_i^3 (Phase 2 of the lmat kernels runs
+  ! C(nn,3) inner iterations per hub).  In the half graph a row holds only
+  ! the neighbours with a larger id, so nn_i falls with i and an equal-count
+  ! split would hand the first shard nearly all the work.  Every shard
+  ! derives the same boundaries from the same CSR, so no coordination is
+  ! needed.  A shard may come out empty on tiny graphs (istart = iend + 1).
+  subroutine csr_shard_range(k, n, istart, iend)
+    use iso_fortran_env, only: real64
+    integer, intent(in) :: k, n
+    integer, intent(out) :: istart, iend
+    integer :: i, nnodes, s, last_before
+    integer(int64) :: nn, nedge
+    real(real64) :: total, acc, c, cost_k
+
+    nnodes = size(csr_ptr) - 1
+    total = 0.0_real64
+    do i = 1, nnodes
+      nn = csr_ptr(i + 1) - csr_ptr(i)
+      total = total + real(nn, real64)**3
+    end do
+
+    ! Hub i goes to the shard whose cost window holds the running total
+    ! before it; the total is nondecreasing, so the shards are contiguous.
+    istart = 0
+    iend = -1
+    last_before = 0
+    acc = 0.0_real64
+    cost_k = 0.0_real64
+    do i = 1, nnodes
+      nn = csr_ptr(i + 1) - csr_ptr(i)
+      c = real(nn, real64)**3
+      s = 1
+      if (total > 0.0_real64) s = min(n, int(acc / total * real(n, real64)) + 1)
+      if (s < k) then
+        last_before = i
+      else if (s == k) then
+        if (istart == 0) istart = i
+        iend = i
+        cost_k = cost_k + c
+      end if
+      acc = acc + c
+    end do
+    if (istart == 0) then          ! empty shard
+      istart = last_before + 1
+      iend = last_before
+    end if
+
+    nedge = 0
+    if (iend >= istart) nedge = csr_ptr(iend + 1) - csr_ptr(istart)
+    if (cfg%rank == 0) then
+      print '("shard ",i0,"/",i0,": hubs ",i0,"-",i0," (",i0," of ",i0,"), ",i0, &
+            &" edges, cost share ",f6.2,"%")', k, n, istart, iend, &
+            max(iend - istart + 1, 0), nnodes, nedge, &
+            100.0_real64 * cost_k / max(total, tiny(total))
+    end if
+  end subroutine csr_shard_range
+
   subroutine deallocate_csr()
     if (allocated(csr_ptr))  deallocate(csr_ptr)
     if (allocated(csr_id))   deallocate(csr_id)

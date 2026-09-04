@@ -1311,6 +1311,135 @@ contains
   end subroutine write_4pcf_jackknife
 
   ! ---------------------------------------------------------------------------
+  ! Multi-GPU hub sharding (-shard k/n, -merge n).
+  !
+  ! A shard runs the kernel on its hub range only and dumps the raw
+  ! accumulators N4/R4 (and the jackknife touching sums N4jk/R4jk) as an
+  ! unformatted stream, so the merge reproduces the single-process sums to
+  ! FP64 rounding (the text estimator carries 7 digits).  Every quadruplet
+  ! is counted at exactly one hub (half graph, k1 < k2 < k3), so the shard
+  ! sums are simply additive -- including the jackknife terms, whose
+  ! hub-region part is per hub and whose neighbour-region part is a sum of
+  ! atomics.
+  !
+  ! finish_4pcf_output is what the GPU kernels call at their end instead of
+  ! the write routines: dump under -shard, otherwise write as before.
+  ! ---------------------------------------------------------------------------
+  subroutine finish_4pcf_output(parity, istart, iend)
+    logical, intent(in) :: parity
+    integer, intent(in) :: istart, iend
+    if (cfg%shard_n > 0) then
+      call write_4pcf_shard(parity, istart, iend)
+      return
+    end if
+    if (parity) then
+      call write_4pcf_results()
+    else
+      call write_4pcf_results_noparity()
+    end if
+    call write_4pcf_jackknife(parity)
+  end subroutine finish_4pcf_output
+
+  function shard_mode(parity) result(mode)
+    logical, intent(in) :: parity
+    character(len=5) :: mode
+    mode = '4pcf'
+    if (parity) mode = '4pcfp'
+  end function shard_mode
+
+  subroutine write_4pcf_shard(parity, istart, iend)
+    logical, intent(in) :: parity
+    integer, intent(in) :: istart, iend
+    integer :: u, nch
+    character(len=2000) :: fname
+
+    if (cfg%rank /= cfg%master) return
+    nch = 1
+    if (parity) nch = 2
+    fname = shard_file(shard_mode(parity), cfg%shard_k, cfg%shard_n)
+    open(newunit=u, file=trim(fname), access='stream', form='unformatted', &
+         status='replace', action='write')
+    write(u) SHARD_MAGIC, SHARD_FORMAT
+    write(u) cfg%n_configs_4pcf, nch, cfg%njk, cfg%shard_k, cfg%shard_n, &
+             istart, iend, cfg%num_data + cfg%num_rand, &
+             int(storage_size(1.0_kdkind) / 8)
+    write(u) N4(:, 1:nch), R4(:, 1:nch)
+    if (cfg%njk > 0) write(u) N4jk(:, 1:nch, 1:cfg%njk), R4jk(:, 1:nch, 1:cfg%njk)
+    close(u)
+    print '(" 4PCF shard ",i0,"/",i0," (hubs ",i0,"-",i0,"): raw sums written to ",a)', &
+      cfg%shard_k, cfg%shard_n, istart, iend, trim(fname)
+  end subroutine write_4pcf_shard
+
+  ! -merge n: add the n shard files into N4/R4 (+ N4jk/R4jk).  Every header
+  ! field is checked against this run's configuration and the hub ranges
+  ! must tile 1..N exactly in shard order, so a missing, duplicated or
+  ! mismatched shard stops the run instead of silently biasing the estimator.
+  subroutine merge_4pcf_shards(parity)
+    logical, intent(in) :: parity
+    integer :: k, u, ios, nch, ntot, prev_hi
+    integer :: fmt_f, nconf_f, nch_f, njk_f, k_f, n_f, lo_f, hi_f, ntot_f, kb_f
+    character(len=16) :: magic
+    character(len=2000) :: fname
+    real(kdkind), allocatable :: a(:,:), b(:,:), ajk(:,:,:), bjk(:,:,:)
+
+    nch = 1
+    if (parity) nch = 2
+    ntot = cfg%num_data + cfg%num_rand
+    allocate(a(cfg%n_configs_4pcf, nch), b(cfg%n_configs_4pcf, nch))
+    if (cfg%njk > 0) then
+      allocate(ajk(cfg%n_configs_4pcf, nch, cfg%njk), &
+               bjk(cfg%n_configs_4pcf, nch, cfg%njk))
+    end if
+
+    prev_hi = 0
+    do k = 1, cfg%merge_n
+      fname = shard_file(shard_mode(parity), k, cfg%merge_n)
+      open(newunit=u, file=trim(fname), access='stream', form='unformatted', &
+           status='old', action='read', iostat=ios)
+      if (ios /= 0) call merge_fail('cannot open shard file')
+      read(u, iostat=ios) magic, fmt_f
+      if (ios /= 0 .or. magic /= SHARD_MAGIC) call merge_fail('not a GRAMSCI 4PCF shard file')
+      if (fmt_f /= SHARD_FORMAT) call merge_fail('shard file format version mismatch')
+      read(u, iostat=ios) nconf_f, nch_f, njk_f, k_f, n_f, lo_f, hi_f, ntot_f, kb_f
+      if (ios /= 0) call merge_fail('truncated shard header')
+      if (kb_f /= int(storage_size(1.0_kdkind) / 8)) &
+        call merge_fail('different floating-point precision build')
+      if (nconf_f /= cfg%n_configs_4pcf) call merge_fail('different -nbins (configuration count)')
+      if (nch_f /= nch) call merge_fail('different mode (-4pcf vs -4pcfp)')
+      if (njk_f /= cfg%njk) call merge_fail('different -njk')
+      if (ntot_f /= ntot) call merge_fail('different catalogue size')
+      if (k_f /= k .or. n_f /= cfg%merge_n) &
+        call merge_fail('shard index/count inside the file disagree with its name')
+      if (lo_f /= prev_hi + 1) call merge_fail('hub ranges do not tile (gap or overlap)')
+      if (hi_f < lo_f - 1) call merge_fail('corrupt hub range')
+      read(u, iostat=ios) a, b
+      if (ios /= 0) call merge_fail('truncated shard data')
+      N4(:, 1:nch) = N4(:, 1:nch) + a
+      R4(:, 1:nch) = R4(:, 1:nch) + b
+      if (cfg%njk > 0) then
+        read(u, iostat=ios) ajk, bjk
+        if (ios /= 0) call merge_fail('truncated shard jackknife data')
+        N4jk(:, 1:nch, 1:cfg%njk) = N4jk(:, 1:nch, 1:cfg%njk) + ajk
+        R4jk(:, 1:nch, 1:cfg%njk) = R4jk(:, 1:nch, 1:cfg%njk) + bjk
+      end if
+      close(u)
+      prev_hi = hi_f
+      if (cfg%rank == 0) &
+        print '(" merged shard ",i0,"/",i0," (hubs ",i0,"-",i0,")")', k, cfg%merge_n, lo_f, hi_f
+    end do
+    if (prev_hi /= ntot) call merge_fail('shards do not cover the whole catalogue')
+    if (cfg%rank == 0) &
+      print '(" 4PCF merge: ",i0," shards, ",i0," hubs")', cfg%merge_n, ntot
+
+  contains
+    subroutine merge_fail(why)
+      character(len=*), intent(in) :: why
+      print '("ERROR: -merge: ",a,": ",a)', why, trim(fname)
+      stop 1
+    end subroutine merge_fail
+  end subroutine merge_4pcf_shards
+
+  ! ---------------------------------------------------------------------------
   ! Cleanup direction lookup arrays
   ! ---------------------------------------------------------------------------
   subroutine cleanup_direction_lookup()

@@ -18,6 +18,11 @@ module config_module
   ! randoms per realisation, orders of magnitude above this threshold.
   real(kdkind), parameter :: JK_DENOM_TOL = 1.0d-4
 
+  ! -shard raw-accumulator files: fixed 16-byte magic + format version so a
+  ! -merge against files from another build or catalogue fails loudly.
+  character(len=16), parameter :: SHARD_MAGIC = 'GRAMSCI4PCFSHARD'
+  integer, parameter :: SHARD_FORMAT = 1
+
   ! Configuration derived type bundling all parameters
   type :: gramsci_config
     integer :: d = 3
@@ -97,6 +102,16 @@ module config_module
     ! No -jkgal/-jkran given with -njk: partition the sky internally into
     ! njk equal-count angular regions (see assign_jk_regions_angular).
     logical :: jk_internal = .false.
+    ! Multi-GPU hub sharding.  -shard k/n: this process queries only the
+    ! k-th of n contiguous hub ranges (cut on the cumulative per-hub cost of
+    ! the CSR rows, see csr_shard_range) and writes the raw accumulators
+    ! N4/R4 (+ N4jk/R4jk) to <out>.shard<k>of<n> instead of the estimator.
+    ! -merge n reads those n files, sums them into N4/R4 and writes the
+    ! usual outputs; it needs no GPU (the graph is rebuilt on the CPU for
+    ! the internal 2PCF of the disconnected term).  4PCF modes only.
+    integer :: shard_k = 0
+    integer :: shard_n = 0
+    integer :: merge_n = 0
   end type gramsci_config
 
   ! Singleton config instance
@@ -296,6 +311,15 @@ contains
         read(arg, *, iostat=ios) cfg%n_phi_dir
         call check_numeric()
         i = i + 2
+      case ('-shard')
+        call get_value(arg)
+        call parse_shard(trim(arg))
+        i = i + 2
+      case ('-merge')
+        call get_value(arg)
+        read(arg, *, iostat=ios) cfg%merge_n
+        call check_numeric()
+        i = i + 2
       case default
         print '("ERROR: unknown option ",a)', trim(opt)
         stop 1
@@ -320,6 +344,29 @@ contains
                  ' (' // trim(cfg%output_file) // '.<mode>)'
       end if
     end block
+    ! -shard / -merge (multi-GPU hub sharding) apply to the 4PCF kernels only:
+    ! any other mode would run in full inside every shard and the shards
+    ! would clobber each other's output.
+    if (cfg%shard_n > 0 .or. cfg%merge_n /= 0) then
+      if (cfg%shard_n > 0 .and. cfg%merge_n /= 0) then
+        print *, 'ERROR: -shard and -merge are mutually exclusive'
+        stop 1
+      end if
+      if (cfg%merge_n < 0) then
+        print *, 'ERROR: -merge n needs n >= 1'
+        stop 1
+      end if
+      if (.not. (cfg%four_pcf .or. cfg%four_pcf_parity) .or. &
+          cfg%two_pcf .or. cfg%three_pcf .or. cfg%three_pcf_eq) then
+        print *, 'ERROR: -shard/-merge require -4pcf and/or -4pcfp and no other query mode'
+        stop 1
+      end if
+      if (cfg%shard_n > 0 .and. (cfg%shard_k < 1 .or. cfg%shard_k > cfg%shard_n)) then
+        print '("ERROR: -shard k/n needs 1 <= k <= n (got ",i0,"/",i0,")")', &
+          cfg%shard_k, cfg%shard_n
+        stop 1
+      end if
+    end if
     if (cfg%nbins <= 0) then
       print *, 'ERROR: -nbins must be specified and > 0'
       stop 1
@@ -475,6 +522,23 @@ contains
     end if
   end subroutine parse_boxsize
 
+  ! -shard k/n
+  subroutine parse_shard(arg)
+    character(len=*), intent(in) :: arg
+    integer :: slash, ios1, ios2
+    slash = index(arg, '/')
+    ios1 = 1
+    ios2 = 1
+    if (slash > 1 .and. slash < len(arg)) then
+      read(arg(1:slash-1), *, iostat=ios1) cfg%shard_k
+      read(arg(slash+1:), *, iostat=ios2) cfg%shard_n
+    end if
+    if (ios1 /= 0 .or. ios2 /= 0 .or. cfg%shard_n < 1) then
+      print '("ERROR: -shard expects k/n with integers 1 <= k <= n (got ",a,")")', trim(arg)
+      stop 1
+    end if
+  end subroutine parse_shard
+
   subroutine print_help()
     print *, 'PURPOSE: Code for calculating the N-PCF of a 3D point set.'
     print *, ' '
@@ -526,6 +590,12 @@ contains
     print *, '       -equi   3-point correlation function (equilateral only)'
     print *, '       -4pcf   4-point correlation function (all configs)'
     print *, '       -4pcfp  4-point correlation function (all configs + parity)'
+    print *, ' '
+    print *, '     multi-GPU hub sharding (-4pcf / -4pcfp only; one process per GPU):'
+    print *, '       -shard k/n  query the k-th of n cost-balanced hub ranges and write'
+    print *, '                   the raw sums to <out>.shard<k>of<n> instead of the estimator'
+    print *, '       -merge n    sum the n shard files (same catalogue and options) and'
+    print *, '                   write the usual outputs; runs on the CPU, needs no GPU'
     print *, '       With one mode the result goes to -out exactly; with'
     print *, '       several, each mode writes to <out>.<mode> (e.g. res.3pcf)'
     print *, ' '
@@ -645,6 +715,15 @@ contains
       fname = cfg%output_file
     end if
   end function mode_output_file
+
+  ! Raw-accumulator file of shard k of n for one 4PCF mode ('4pcf'|'4pcfp'):
+  ! <mode output file>.shard<k>of<n>.  Written under -shard, read by -merge.
+  function shard_file(mode, k, n) result(fname)
+    character(len=*), intent(in) :: mode
+    integer, intent(in) :: k, n
+    character(len=2000) :: fname
+    fname = trim(mode_output_file(mode)) // '.shard' // trim(str(k)) // 'of' // trim(str(n))
+  end function shard_file
 
   character(len=20) function str(k)
     integer, intent(in) :: k

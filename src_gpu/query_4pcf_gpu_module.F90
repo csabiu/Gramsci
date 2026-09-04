@@ -74,7 +74,7 @@ module query_4pcf_gpu_module
   use config_module
   use csr_module
   use query_4pcf_module, only: &
-    write_4pcf_results, write_4pcf_results_noparity, write_4pcf_jackknife, &
+    finish_4pcf_output, &
     dir_x, dir_y, dir_z, VOL_DEGEN_TOL, px, py, pz
   implicit none
 
@@ -603,8 +603,7 @@ contains
     deallocate(lmat_g, part_n4, part_r4, hub_n4jk, hub_r4jk)
     deallocate(hub_perm, reg_lo, gang_grp, gang_lo, gang_n)
 
-    call write_4pcf_results_noparity()
-    call write_4pcf_jackknife(.false.)
+    call finish_4pcf_output(.false., istart, iend)
   end subroutine query_graph_4pcf_gpu
 
 
@@ -1294,8 +1293,7 @@ contains
     deallocate(hub_perm, reg_lo, gang_grp, gang_lo, gang_n)
     if (allocated(ug)) deallocate(ug)
 
-    call write_4pcf_results()
-    call write_4pcf_jackknife(.true.)
+    call finish_4pcf_output(.true., istart, iend)
   end subroutine query_graph_4pcf_parity_gpu
 
   ! ---------------------------------------------------------------------------
