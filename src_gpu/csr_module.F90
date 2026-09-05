@@ -207,7 +207,9 @@ contains
     use openacc
     integer(int64) :: bytes
     integer(acc_device_kind) :: devtype
-    integer :: devnum
+    integer :: devnum, stat
+    integer(int64) :: lim
+    character(32) :: env
 
     devtype = acc_get_device_type()
     if (devtype == acc_device_host .or. devtype == acc_device_none) then
@@ -217,6 +219,14 @@ contains
     devnum = acc_get_device_num(devtype)
     bytes = int(acc_get_property(devnum, devtype, acc_property_free_memory), int64)
     if (bytes <= 0) bytes = -1_int64
+    ! GRAMSCI_GPU_MEM_LIMIT (bytes): pretend the device has at most this much
+    ! free memory, so the tests can exercise the tight-memory sizing paths
+    ! (CSR-limited scratch, chunked fallback) on small data.
+    call get_environment_variable('GRAMSCI_GPU_MEM_LIMIT', env, status=stat)
+    if (stat == 0 .and. bytes > 0) then
+      read(env, *, iostat=stat) lim
+      if (stat == 0 .and. lim > 0) bytes = min(bytes, lim)
+    end if
   end function gpu_free_mem_bytes
 
   ! Longest adjacency row in the CSR graph (sizes per-hub scratch like lmat).

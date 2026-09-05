@@ -116,6 +116,7 @@ contains
     ! Neighbour-list tiling of the single-pass Phase 2 (see gpu_tile_size)
     integer :: tile, nblk, nt_i, ta, tb, tc, alo, ahi, blo, bhi, clo, chi, iac, ibc
     integer(int64) :: mnn2, lmat_bytes, freeb, win_edges, jk_bytes
+    integer(int64) :: bpe, csr_bytes, ug_bytes, avail, budget
     character(32) :: env
 
     ! Chunking bookkeeping
@@ -170,36 +171,42 @@ contains
       end if
     end if
 
-    ! Single-pass scratch: three tile x tile int8 blocks per gang (tiled
-    ! Phase 2, see the kernel), independent of max_nn.  The chunked path keeps
-    ! the full max_nn^2 matrix per gang (window tiling and neighbour tiling
-    ! are not combined), so if the CSR does not fit alongside the tiled
-    ! scratch the gang count is re-derived below for the full matrix.
-    call gpu_tile_size(max_nn, merge(-1_int64, (freeb - RESERVE_BYTES - jk_bytes) / 3, freeb < 0), &
-                       tile, nblk)
-    mnn2  = int(nblk, int64) * int(tile, int64)**2
-    ngang = gang_count(freeb, jk_bytes, mnn2)
-    lmat_bytes = int(ngang, int64) * mnn2
-
-    ! Three edge windows (hub + 2 search) resident in chunked mode.
-    win_edges = csr_edge_window(3, lmat_bytes + jk_bytes)
-    nwin = int((csr_total_edges - 1) / win_edges) + 1
-    ! Without an explicit override, prefer single-pass whenever the whole
-    ! CSR fits alongside the scratch (= up to 3 windows' worth of edges).
+    ! ---- Single pass or chunked, and the scratch budget -------------------
+    ! (see query_graph_4pcf_parity_gpu; here the resident CSR is 5 B/edge and
+    ! there are no spoke vectors)
+    csr_bytes = csr_total_edges * 5_int64
     call get_environment_variable('GRAMSCI_GPU_WIN_EDGES', env, status=env_stat)
-    if (env_stat /= 0 .and. nwin > 1 .and. nwin <= 3) nwin = 1
-    if (nwin > 1) then          ! chunked: full per-gang matrix, sized as before
-      mnn2  = int(max_nn, int64)**2
-      ngang = gang_count(freeb, jk_bytes, mnn2)
+    avail  = -1_int64
+    budget = -1_int64
+    if (freeb >= 0) then
+      avail  = freeb - RESERVE_BYTES - jk_bytes
+      budget = min(avail / 3, avail - csr_bytes)
+    end if
+    if (env_stat /= 0 .and. &
+        (freeb < 0 .or. budget >= 512_int64 * 3_int64 * 64_int64**2)) then
+      nwin = 1
+      call gpu_tile_size(max_nn, budget, 0_int64, tile, nblk)
+      mnn2  = int(nblk, int64) * int(tile, int64)**2
+      ngang = gang_count(budget, mnn2)
       lmat_bytes = int(ngang, int64) * mnn2
+      win_edges  = max(csr_total_edges, 1_int64)
+    else
+      tile = 0
+      nblk = 0
+      mnn2  = int(max_nn, int64)**2
+      ngang = gang_count(merge(-1_int64, avail / 3, freeb < 0), mnn2)
+      lmat_bytes = int(ngang, int64) * mnn2
+      ! Three edge windows (hub + 2 search) resident in chunked mode.
       win_edges = csr_edge_window(3, lmat_bytes + jk_bytes)
-      nwin = int((csr_total_edges - 1) / win_edges) + 1
+      nwin = max(2, int((csr_total_edges - 1) / win_edges) + 1)   ! forced: never 1
     end if
 
     if (cfg%rank == 0) &
       print '("4PCF GPU: max_nn=",i0,"  gangs=",i0,"  lmat scratch=",f6.2," GB",'// &
-            '"  windows=",i0,"  tile=",i0,"x",i0)', max_nn, ngang, real(lmat_bytes, kdkind)/1.0d9, &
-            nwin, merge(tile, 0, nwin == 1), merge(nblk, 0, nwin == 1)
+            '"  windows=",i0,"  tile=",i0,"x",i0,"  csr=",f6.2," GB")', &
+            max_nn, ngang, real(lmat_bytes, kdkind)/1.0d9, &
+            nwin, merge(tile, 0, nwin == 1), merge(nblk, 0, nwin == 1), &
+            real(csr_bytes, kdkind)/1.0d9
 
     call jk_gang_layout(istart, iend, ngang, njk_g, hub_perm, reg_lo, &
                         gang_grp, gang_lo, gang_n, direct_hub)
@@ -739,6 +746,7 @@ contains
     ! Neighbour-list tiling of the single-pass Phase 2 (see gpu_tile_size)
     integer :: tile, nblk, nt_i, ta, tb, tc, alo, ahi, blo, bhi, clo, chi, iac, ibc
     integer(int64) :: mnn2, lmat_bytes, freeb, win_edges, jk_bytes
+    integer(int64) :: bpe, csr_bytes, ug_bytes, avail, budget
     character(32) :: env
 
     ! Chunking bookkeeping
@@ -796,39 +804,55 @@ contains
       end if
     end if
 
-    ! Single-pass scratch: three tile x tile int8 blocks per gang (tiled
-    ! Phase 2, see query_graph_4pcf_gpu); the chunked path keeps the full
-    ! max_nn^2 matrix and re-derives the gang count below if the CSR does
-    ! not fit alongside the tiled scratch.
-    call gpu_tile_size(max_nn, merge(-1_int64, (freeb - RESERVE_BYTES - jk_bytes) / 3, freeb < 0), &
-                       tile, nblk)
-    mnn2  = int(nblk, int64) * int(tile, int64)**2
-    ngang = gang_count(freeb, jk_bytes, mnn2)
-    lmat_bytes = int(ngang, int64) * mnn2
-
-    ! 4 window budgets: hub window costs 7 B/edge (id 4 + dist 1 + phi 2), the
-    ! two staged search windows 5 B/edge — a 4×5 B budget covers 7+5+5 with
-    ! slack.
-    win_edges = csr_edge_window(4, lmat_bytes + jk_bytes)
-    nwin = int((csr_total_edges - 1) / win_edges) + 1
+    ! ---- Single pass or chunked, and the scratch budget -------------------
+    ! A single pass keeps the whole CSR resident: csr_id (4 B) + csr_dist
+    ! (1 B) per edge, plus the int16 direction pixel unless -exactparity
+    ! takes the sign from the positions.  Take it whenever that fits beside
+    ! the reserve, the jackknife accumulators and a minimal tiled scratch;
+    ! the scratch budget is then the smaller of a third of the free memory
+    ! (the historical rule, so runs that fit before are sized exactly as
+    ! before) and whatever the CSR leaves, and the tile adapts to it
+    ! (gpu_tile_size).  Otherwise the chunked path streams the CSR in
+    ! windows and keeps the full max_nn^2 matrix per gang.
+    ! GRAMSCI_GPU_WIN_EDGES forces chunking (tests).
+    bpe = 5_int64
+    if (.not. exact_g) bpe = 7_int64
+    csr_bytes = csr_total_edges * bpe
+    ug_bytes  = 0_int64
+    if (exact_g) ug_bytes = int(max_nn, int64) * 24_int64      ! spoke vectors per gang
     call get_environment_variable('GRAMSCI_GPU_WIN_EDGES', env, status=env_stat)
-    ! Collapse to a single pass only if the resident window really fits: 7 B/edge
-    ! against the 20 B/edge budget win_edges was derived from.  The previous
-    ! `nwin <= 3` test admitted up to 6 B/edge and over-commits at int16 phi.
-    if (env_stat /= 0 .and. nwin > 1 .and. &
-        csr_total_edges * 7_int64 <= win_edges * 20_int64) nwin = 1
-    if (nwin > 1) then          ! chunked: full per-gang matrix, sized as before
-      mnn2  = int(max_nn, int64)**2
-      ngang = gang_count(freeb, jk_bytes, mnn2)
+    avail  = -1_int64
+    budget = -1_int64
+    if (freeb >= 0) then
+      avail  = freeb - RESERVE_BYTES - jk_bytes
+      budget = min(avail / 3, avail - csr_bytes)
+    end if
+    if (env_stat /= 0 .and. &
+        (freeb < 0 .or. budget >= 512_int64 * (3_int64 * 64_int64**2 + ug_bytes))) then
+      nwin = 1
+      call gpu_tile_size(max_nn, budget, ug_bytes, tile, nblk)
+      mnn2  = int(nblk, int64) * int(tile, int64)**2 + ug_bytes
+      ngang = gang_count(budget, mnn2)
       lmat_bytes = int(ngang, int64) * mnn2
+      win_edges  = max(csr_total_edges, 1_int64)
+    else
+      tile = 0
+      nblk = 0
+      mnn2  = int(max_nn, int64)**2
+      ngang = gang_count(merge(-1_int64, avail / 3, freeb < 0), mnn2)
+      lmat_bytes = int(ngang, int64) * mnn2
+      ! 4 window budgets: hub window 7 B/edge (id + dist + phi), two staged
+      ! search windows 5 B/edge each -- 4 x 5 B covers 7+5+5 with slack.
       win_edges = csr_edge_window(4, lmat_bytes + jk_bytes)
-      nwin = int((csr_total_edges - 1) / win_edges) + 1
+      nwin = max(2, int((csr_total_edges - 1) / win_edges) + 1)   ! forced: never 1
     end if
 
     if (cfg%rank == 0) &
       print '("4PCFp GPU: max_nn=",i0,"  gangs=",i0,"  lmat scratch=",f6.2," GB",'// &
-            '"  windows=",i0,"  tile=",i0,"x",i0)', max_nn, ngang, real(lmat_bytes, kdkind)/1.0d9, &
-            nwin, merge(tile, 0, nwin == 1), merge(nblk, 0, nwin == 1)
+            '"  windows=",i0,"  tile=",i0,"x",i0,"  csr=",f6.2," GB")', &
+            max_nn, ngang, real(lmat_bytes, kdkind)/1.0d9, &
+            nwin, merge(tile, 0, nwin == 1), merge(nblk, 0, nwin == 1), &
+            real(csr_bytes, kdkind)/1.0d9
 
     if (nwin == 1) then
       allocate(blk_g(tile, tile, nblk, ngang))
@@ -1515,11 +1539,13 @@ contains
   ! Tiles cost O(max_nn/tile) redundant Phase-1 searches, negligible against
   ! Phase 2's O(nn^3).  GRAMSCI_GPU_TILE forces the edge (the tests use tiny
   ! tiles to exercise the multi-tile path on small data).
-  subroutine gpu_tile_size(max_nn, budget, tile, nblk)
+  subroutine gpu_tile_size(max_nn, budget, ug_bytes, tile, nblk)
     integer, intent(in) :: max_nn
-    integer(int64), intent(in) :: budget      ! bytes for all gangs' scratch
+    integer(int64), intent(in) :: budget      ! bytes for all gangs' scratch; -1 = no device limit
+    integer(int64), intent(in) :: ug_bytes    ! other per-gang scratch (spoke vectors), bytes
     integer, intent(out) :: tile, nblk
     integer :: stat, t, nt
+    integer(int64) :: per_gang
     character(32) :: env
     ! Gangs to keep resident: fewer and the GPU runs short of parallelism
     ! (the 512-gang floor of the full-matrix sizing costs a lot at large
@@ -1533,28 +1559,32 @@ contains
         stop 1
       end if
       tile = min(max_nn, t)
-    else if (budget < 0 .or. budget / int(max_nn, int64)**2 >= GANG_TARGET) then
+    else if (budget < 0) then
       tile = max_nn
     else
-      t = int(sqrt(real(budget, kind=8) / (3.0d0 * GANG_TARGET)))
-      t = max(t, 64)
-      nt = (max_nn + t - 1) / t                 ! tiles needed ...
-      tile = (max_nn + nt - 1) / nt             ! ... made equal-sized
+      per_gang = budget / GANG_TARGET - ug_bytes
+      if (per_gang >= int(max_nn, int64)**2) then
+        tile = max_nn                              ! full matrix affordable
+      else
+        t = int(sqrt(real(max(per_gang, 3_int64 * 64_int64**2), kind=8) / 3.0d0))
+        t = max(t, 64)
+        nt = (max_nn + t - 1) / t                  ! tiles needed ...
+        tile = (max_nn + nt - 1) / nt              ! ... made equal-sized
+      end if
     end if
     tile = max(2, tile)
     nblk = merge(1, 3, tile >= max_nn)
   end subroutine gpu_tile_size
 
-  ! Gangs whose per-gang scratch (scratch_bytes each) fits in ~1/3 of the
-  ! free device memory, clamped to [512, 4096]; 1024 with no device limit.
-  function gang_count(freeb, jk_bytes, scratch_bytes) result(ngang)
-    integer(int64), intent(in) :: freeb, jk_bytes, scratch_bytes
+  ! Gangs whose per-gang scratch fits in the budget, clamped to [512, 4096];
+  ! 1024 with no device limit (budget < 0).
+  function gang_count(budget, scratch_bytes) result(ngang)
+    integer(int64), intent(in) :: budget, scratch_bytes
     integer :: ngang
-    if (freeb < 0) then
+    if (budget < 0) then
       ngang = 1024
     else
-      ngang = int(min(4096_int64, max(512_int64, &
-                      ((freeb - RESERVE_BYTES - jk_bytes) / 3) / scratch_bytes)))
+      ngang = int(min(4096_int64, max(512_int64, budget / max(scratch_bytes, 1_int64))))
     end if
   end function gang_count
 
