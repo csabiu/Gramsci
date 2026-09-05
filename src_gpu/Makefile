@@ -30,8 +30,21 @@ else
   GPU_MEM =
 endif
 
+# Register cap for the device kernels.  The tiled single-pass 4PCF kernels
+# carry more gang-private scalars than the untiled ones and would otherwise
+# compile to ~168 registers, dropping resident gangs per SM from 8 to 6 and
+# costing ~15% at rmax 65 on an RTX 4090; capped at 128 ptxas finds a
+# 123-register allocation with no spills and the overhead is ~3%.  A cap of
+# 112 spills and is slower again.  Override: make MAXREG=0 to remove the cap.
+MAXREG ?= 128
+ifeq ($(MAXREG),0)
+  REG_FLAG =
+else
+  REG_FLAG = ,maxregcount:$(MAXREG)
+endif
+
 # Compiler flags
-ACC_FLAGS  = -acc -gpu=$(GPU)$(GPU_MEM) -Minfo=accel
+ACC_FLAGS  = -acc -gpu=$(GPU)$(GPU_MEM)$(REG_FLAG) -Minfo=accel
 BASE_FLAGS = -DDOUBLE -Mfreeform
 OPT_FLAGS  = -O3 -fast
 FLAGS      = $(BASE_FLAGS) $(OPT_FLAGS) $(ACC_FLAGS) -mp

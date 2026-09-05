@@ -31,8 +31,11 @@
 ! part_*(config, ig) via ATOMIC UPDATE (lanes within a gang race; gangs do
 ! not), summed on the host afterwards.
 !
-! Runtime sizing: lmat extent = longest CSR row (csr_max_row_len); the gang
-! count and edge-window size are derived from free device memory.
+! Runtime sizing: the single-pass kernels tile the neighbour list (see
+! gpu_tile_size) and hold three tile^2 blocks of lmat per gang, so their
+! scratch does not grow with max_nn; the chunked kernels keep the full
+! max_nn^2 per-gang matrix.  Gang count and edge-window size are derived
+! from free device memory.
 !
 ! Chunked mode (graphs larger than device memory): Phase 2 reads lmat columns
 ! built from TWO different neighbor rows (id1's and id2's), so tiles run over
@@ -110,6 +113,8 @@ contains
 
     ! Runtime sizing
     integer :: max_nn, ngang, nwin, env_stat
+    ! Neighbour-list tiling of the single-pass Phase 2 (see gpu_tile_size)
+    integer :: tile, nblk, nt_i, ta, tb, tc, alo, ahi, blo, bhi, clo, chi, iac, ibc
     integer(int64) :: mnn2, lmat_bytes, freeb, win_edges, jk_bytes
     character(32) :: env
 
@@ -126,6 +131,9 @@ contains
     ! of the edge between hub-neighbors k1 and k2 (k2 > k1).  Transposed so
     ! vector lanes (consecutive k2 / k3) read stride-1 → coalesced.
     integer(int8), allocatable :: lmat_g(:,:,:)
+    ! Single-pass path: three tile x tile blocks of it per gang instead,
+    ! blk_g(:,:,1:3,ig) = the AB, AC, BC blocks of the current tile triple.
+    integer(int8), allocatable :: blk_g(:,:,:,:)
     ! Per-gang partial accumulators, summed over gangs on the host.
     real(kdkind), allocatable :: part_n4(:,:), part_r4(:,:)
 
@@ -143,7 +151,6 @@ contains
 
     ! ---- Runtime sizing -------------------------------------------------
     max_nn = max(csr_max_row_len(), 1)
-    mnn2   = int(max_nn, int64)**2
     freeb  = gpu_free_mem_bytes()
 
     ! Jackknife accumulators resident on device for the whole query
@@ -163,13 +170,15 @@ contains
       end if
     end if
 
-    if (freeb < 0) then
-      ngang = 1024        ! host fallback: no device limit, modest scratch
-    else
-      ! lmat scratch capped at ~1/3 of available device memory.
-      ngang = int(min(4096_int64, max(512_int64, &
-                      ((freeb - RESERVE_BYTES - jk_bytes) / 3) / mnn2)))
-    end if
+    ! Single-pass scratch: three tile x tile int8 blocks per gang (tiled
+    ! Phase 2, see the kernel), independent of max_nn.  The chunked path keeps
+    ! the full max_nn^2 matrix per gang (window tiling and neighbour tiling
+    ! are not combined), so if the CSR does not fit alongside the tiled
+    ! scratch the gang count is re-derived below for the full matrix.
+    call gpu_tile_size(max_nn, merge(-1_int64, (freeb - RESERVE_BYTES - jk_bytes) / 3, freeb < 0), &
+                       tile, nblk)
+    mnn2  = int(nblk, int64) * int(tile, int64)**2
+    ngang = gang_count(freeb, jk_bytes, mnn2)
     lmat_bytes = int(ngang, int64) * mnn2
 
     ! Three edge windows (hub + 2 search) resident in chunked mode.
@@ -179,10 +188,18 @@ contains
     ! CSR fits alongside the scratch (= up to 3 windows' worth of edges).
     call get_environment_variable('GRAMSCI_GPU_WIN_EDGES', env, status=env_stat)
     if (env_stat /= 0 .and. nwin > 1 .and. nwin <= 3) nwin = 1
+    if (nwin > 1) then          ! chunked: full per-gang matrix, sized as before
+      mnn2  = int(max_nn, int64)**2
+      ngang = gang_count(freeb, jk_bytes, mnn2)
+      lmat_bytes = int(ngang, int64) * mnn2
+      win_edges = csr_edge_window(3, lmat_bytes + jk_bytes)
+      nwin = int((csr_total_edges - 1) / win_edges) + 1
+    end if
 
     if (cfg%rank == 0) &
       print '("4PCF GPU: max_nn=",i0,"  gangs=",i0,"  lmat scratch=",f6.2," GB",'// &
-            '"  windows=",i0)', max_nn, ngang, real(lmat_bytes, kdkind)/1.0d9, nwin
+            '"  windows=",i0,"  tile=",i0,"x",i0)', max_nn, ngang, real(lmat_bytes, kdkind)/1.0d9, &
+            nwin, merge(tile, 0, nwin == 1), merge(nblk, 0, nwin == 1)
 
     call jk_gang_layout(istart, iend, ngang, njk_g, hub_perm, reg_lo, &
                         gang_grp, gang_lo, gang_n, direct_hub)
@@ -192,7 +209,11 @@ contains
     hub_r4jk = 0.0d0
     folded = .false.
 
-    allocate(lmat_g(max_nn, max_nn, ngang))
+    if (nwin == 1) then
+      allocate(blk_g(tile, tile, nblk, ngang))
+    else
+      allocate(lmat_g(max_nn, max_nn, ngang))
+    end if
     allocate(part_n4(n_configs_g, ngang))
     allocate(part_r4(n_configs_g, ngang))
     part_n4 = 0.0d0
@@ -205,16 +226,17 @@ contains
       !$ACC DATA &
       !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, weights, bintable6, region, &
       !$ACC&        hub_perm, reg_lo, gang_grp, gang_lo, gang_n) &
-      !$ACC& CREATE(lmat_g) COPY(part_n4, part_r4, N4jk, R4jk)
+      !$ACC& CREATE(blk_g) COPY(part_n4, part_r4, N4jk, R4jk)
 
       ! One gang per ig slot; hubs dealt round-robin so gang loads even out.
-      ! Each gang exclusively owns lmat_g(:,:,ig) and part_*(:,ig).
+      ! Each gang exclusively owns blk_g(:,:,:,ig) and part_*(:,ig).
       ! VECTOR_LENGTH(64): inner-loop trip counts shrink with k2/k3, so shorter
       ! vectors keep lanes busier than 128 while still filling the SMs.
       !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(64) &
       !$ACC& PRIVATE(ig, i, p, g, k1, k2, nn_i, id1, id2, base_i, &
       !$ACC&         ind1, ind2, ind4, w12, rand12, jr1, jr2, jr3, &
-      !$ACC&         mixed, dojk, do2, do3)
+      !$ACC&         mixed, dojk, do2, do3, &
+      !$ACC&         nt_i, ta, tb, tc, alo, ahi, blo, bhi, clo, chi, iac, ibc)
       do ig = 1, ngang
         ! Gang ig belongs to group g: hubs hub_perm(reg_lo(g):reg_lo(g+1)-1)
         ! dealt round-robin over the gang_n(g) gangs of the group.
@@ -229,119 +251,185 @@ contains
           mixed = .false.
           if (njk_g > 0) jr1 = region(i)
 
-          ! ---- Phase 1: precompute local connectivity matrix ---------------
-          ! C(nn_i, 2) binary searches.  For fixed k1 all lanes search the SAME
-          ! id1 adjacency list (different targets) → warp-coherent, L1-cached.
-          do k1 = 1, nn_i
-            id1 = csr_id(base_i + k1)
-            if (njk_g > 0) then
-              if (region(id1) /= jr1) mixed = .true.
-            end if
-            !$ACC LOOP VECTOR PRIVATE(k2, id2)
-            do k2 = k1 + 1, nn_i
-              id2 = csr_id(base_i + k2)
-              lmat_g(k2, k1, ig) = &
-                csr_find_dist_bin(csr_ptr, csr_id, csr_dist, id1, id2)
+          ! ---- neighbour-region scan for the jackknife -------------------
+          ! (the connectivity matrix itself is built per tile in Phase 2)
+          if (njk_g > 0) then
+            !$ACC LOOP VECTOR REDUCTION(.or.:mixed) PRIVATE(k1)
+            do k1 = 1, nn_i
+              mixed = mixed .or. (region(csr_id(base_i + k1)) /= jr1)
             end do
-          end do
+          end if
 
           ! Run the jackknife block only for hubs whose neighbours cross a
           ! region boundary (interior hubs are fully covered by the per-gang
           ! partials), or always under the direct-atomic fallback.
           dojk = (njk_g > 0) .and. (mixed .or. direct_hub)
 
-          ! ---- Phase 2: triple loop; k3 across lanes, lmat reads coalesced -
-          do k1 = 1, nn_i
-            ind1 = csr_dist(base_i + k1)
-            id1  = csr_id  (base_i + k1)
-            if (dojk) then
-              jr2 = region(id1)
-              do2 = (jr2 > 0 .and. jr2 /= jr1)
-            end if
-
-            do k2 = k1 + 1, nn_i
-              ind4 = lmat_g(k2, k1, ig)   ! O(1) lookup: dist bin of k1→k2
-              if (ind4 == 0) cycle
-              ind2 = csr_dist(base_i + k2)
-              id2  = csr_id  (base_i + k2)
-              if (dojk) then
-                jr3 = region(id2)
-                do3 = (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2)
-              end if
-              w12  = weights(i) * weights(id1) * weights(id2)
-              rand12 = (i > num_data_g .and. id1 > num_data_g .and. &
-                        id2 > num_data_g)
-
-              !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, ind3, ind5, ind6, w4, jr4, do4)
-              do k3 = k2 + 1, nn_i
-                ind5 = lmat_g(k3, k1, ig)   ! stride-1 across lanes
-                if (ind5 == 0) cycle
-                ind6 = lmat_g(k3, k2, ig)   ! stride-1 across lanes
-                if (ind6 == 0) cycle
-
-                ind3 = csr_dist(base_i + k3)
-
-                config_idx = abs(bintable6(int(ind1), int(ind2), int(ind3), &
-                                           int(ind4), int(ind5), int(ind6)))
-                if (config_idx == 0) cycle
-
-                id3 = csr_id(base_i + k3)
-                w4  = w12 * weights(id3)
-
-                !$ACC ATOMIC UPDATE
-                part_n4(config_idx, ig) = part_n4(config_idx, ig) + w4
-
-                if (rand12 .and. id3 > num_data_g) then
-                  !$ACC ATOMIC UPDATE
-                  part_r4(config_idx, ig) = part_r4(config_idx, ig) + w4
+          ! ---- Phase 2: tiled triple loop -------------------------------
+          ! (k1, k2, k3) runs over tile x tile x tile blocks (ta <= tb <= tc)
+          ! of the neighbour list.  Each block triple needs three tile^2
+          ! blocks of the connectivity matrix -- lmat(k2,k1) [AB], lmat(k3,k1)
+          ! [AC], lmat(k3,k2) [BC] -- built here by binary search into the
+          ! CSR rows (Phase 1 of the untiled kernel) and stored transposed in
+          ! blk_g(:,:,1:3,ig) so consecutive k3 lanes read stride-1.  A block
+          ! is rebuilt only when its tile pair changes: AB once per (ta,tb),
+          ! AC/BC once per tc, diagonal tiles reuse AB.  That is O(nn/tile)
+          ! redundant searches against Phase 2's O(nn^3), and the scratch is
+          ! 3 tile^2 per gang whatever max_nn is.
+          nt_i = (nn_i + tile - 1) / tile
+          do ta = 1, nt_i
+            alo = (ta - 1) * tile + 1
+            ahi = min(ta * tile, nn_i)
+            do tb = ta, nt_i
+              blo = (tb - 1) * tile + 1
+              bhi = min(tb * tile, nn_i)
+              ! AB = lmat(k2 in tb, k1 in ta) -> block 1
+              do k1 = alo, ahi
+                id1 = csr_id(base_i + k1)
+                !$ACC LOOP VECTOR PRIVATE(k2, id2)
+                do k2 = max(blo, k1 + 1), bhi
+                  id2 = csr_id(base_i + k2)
+                  blk_g(k2 - blo + 1, k1 - alo + 1, 1, ig) = &
+                    csr_find_dist_bin(csr_ptr, csr_id, csr_dist, id1, id2)
+                end do
+              end do
+              do tc = tb, nt_i
+                clo = (tc - 1) * tile + 1
+                chi = min(tc * tile, nn_i)
+                if (tc == tb) then
+                  iac = 1                   ! (ta,tc) = (ta,tb) = AB
+                  if (tb == ta) then
+                    ibc = 1                 ! (tb,tc) = (ta,ta) = AB
+                  else
+                    ibc = 3                 ! diagonal block (tb,tb) -> 3
+                    do k2 = blo, bhi
+                      id2 = csr_id(base_i + k2)
+                      !$ACC LOOP VECTOR PRIVATE(k3, id3)
+                      do k3 = k2 + 1, chi
+                        id3 = csr_id(base_i + k3)
+                        blk_g(k3 - clo + 1, k2 - blo + 1, 3, ig) = &
+                          csr_find_dist_bin(csr_ptr, csr_id, csr_dist, id2, id3)
+                      end do
+                    end do
+                  end if
+                else
+                  iac = 2                   ! AC = lmat(k3 in tc, k1 in ta) -> 2
+                  ibc = 3                   ! BC = lmat(k3 in tc, k2 in tb) -> 3
+                  do k1 = alo, ahi
+                    id1 = csr_id(base_i + k1)
+                    !$ACC LOOP VECTOR PRIVATE(k3, id3)
+                    do k3 = clo, chi
+                      id3 = csr_id(base_i + k3)
+                      blk_g(k3 - clo + 1, k1 - alo + 1, 2, ig) = &
+                        csr_find_dist_bin(csr_ptr, csr_id, csr_dist, id1, id3)
+                    end do
+                  end do
+                  do k2 = blo, bhi
+                    id2 = csr_id(base_i + k2)
+                    !$ACC LOOP VECTOR PRIVATE(k3, id3)
+                    do k3 = clo, chi
+                      id3 = csr_id(base_i + k3)
+                      blk_g(k3 - clo + 1, k2 - blo + 1, 3, ig) = &
+                        csr_find_dist_bin(csr_ptr, csr_id, csr_dist, id2, id3)
+                    end do
+                  end do
                 end if
 
-                ! Jackknife (see module header / jk_gang_layout): the hub-region
-                ! term rides on part_n4/part_r4; only neighbour regions that differ
-                ! from the hub's need atomics, and only mixed hubs get here (dojk).
-                ! direct_hub: fallback that also does the hub term with atomics.
-                if (dojk) then
-                  jr4 = region(id3)
-                  do4 = (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3)
-                  if (direct_hub .and. jr1 > 0) then
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 1, jr1) = N4jk(config_idx, 1, jr1) + w4
+                ! ---- triple loop over the (ta, tb, tc) tile; k3 across lanes
+                do k1 = alo, ahi
+                  ind1 = csr_dist(base_i + k1)
+                  id1  = csr_id  (base_i + k1)
+                  if (dojk) then
+                    jr2 = region(id1)
+                    do2 = (jr2 > 0 .and. jr2 /= jr1)
                   end if
-                  if (do2) then
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 1, jr2) = N4jk(config_idx, 1, jr2) + w4
-                  end if
-                  if (do3) then
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 1, jr3) = N4jk(config_idx, 1, jr3) + w4
-                  end if
-                  if (do4) then
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 1, jr4) = N4jk(config_idx, 1, jr4) + w4
-                  end if
-                  if (rand12 .and. id3 > num_data_g) then
-                    if (direct_hub .and. jr1 > 0) then
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 1, jr1) = R4jk(config_idx, 1, jr1) + w4
-                    end if
-                    if (do2) then
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 1, jr2) = R4jk(config_idx, 1, jr2) + w4
-                    end if
-                    if (do3) then
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 1, jr3) = R4jk(config_idx, 1, jr3) + w4
-                    end if
-                    if (do4) then
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 1, jr4) = R4jk(config_idx, 1, jr4) + w4
-                    end if
-                  end if
-                end if
 
-              end do  ! k3 (VECTOR)
-            end do  ! k2
-          end do  ! k1
+                  do k2 = max(blo, k1 + 1), bhi
+                    ind4 = blk_g(k2 - blo + 1, k1 - alo + 1, 1, ig)   ! O(1) lookup: dist bin of k1→k2
+                    if (ind4 == 0) cycle
+                    ind2 = csr_dist(base_i + k2)
+                    id2  = csr_id  (base_i + k2)
+                    if (dojk) then
+                      jr3 = region(id2)
+                      do3 = (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2)
+                    end if
+                    w12  = weights(i) * weights(id1) * weights(id2)
+                    rand12 = (i > num_data_g .and. id1 > num_data_g .and. &
+                              id2 > num_data_g)
+
+                    !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, ind3, ind5, ind6, w4, jr4, do4)
+                    do k3 = max(clo, k2 + 1), chi
+                      ind5 = blk_g(k3 - clo + 1, k1 - alo + 1, iac, ig)   ! stride-1 across lanes
+                      if (ind5 == 0) cycle
+                      ind6 = blk_g(k3 - clo + 1, k2 - blo + 1, ibc, ig)   ! stride-1 across lanes
+                      if (ind6 == 0) cycle
+
+                      ind3 = csr_dist(base_i + k3)
+
+                      config_idx = abs(bintable6(int(ind1), int(ind2), int(ind3), &
+                                                 int(ind4), int(ind5), int(ind6)))
+                      if (config_idx == 0) cycle
+
+                      id3 = csr_id(base_i + k3)
+                      w4  = w12 * weights(id3)
+
+                      !$ACC ATOMIC UPDATE
+                      part_n4(config_idx, ig) = part_n4(config_idx, ig) + w4
+
+                      if (rand12 .and. id3 > num_data_g) then
+                        !$ACC ATOMIC UPDATE
+                        part_r4(config_idx, ig) = part_r4(config_idx, ig) + w4
+                      end if
+
+                      ! Jackknife (see module header / jk_gang_layout): the hub-region
+                      ! term rides on part_n4/part_r4; only neighbour regions that differ
+                      ! from the hub's need atomics, and only mixed hubs get here (dojk).
+                      ! direct_hub: fallback that also does the hub term with atomics.
+                      if (dojk) then
+                        jr4 = region(id3)
+                        do4 = (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3)
+                        if (direct_hub .and. jr1 > 0) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr1) = N4jk(config_idx, 1, jr1) + w4
+                        end if
+                        if (do2) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr2) = N4jk(config_idx, 1, jr2) + w4
+                        end if
+                        if (do3) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr3) = N4jk(config_idx, 1, jr3) + w4
+                        end if
+                        if (do4) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr4) = N4jk(config_idx, 1, jr4) + w4
+                        end if
+                        if (rand12 .and. id3 > num_data_g) then
+                          if (direct_hub .and. jr1 > 0) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr1) = R4jk(config_idx, 1, jr1) + w4
+                          end if
+                          if (do2) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr2) = R4jk(config_idx, 1, jr2) + w4
+                          end if
+                          if (do3) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr3) = R4jk(config_idx, 1, jr3) + w4
+                          end if
+                          if (do4) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr4) = R4jk(config_idx, 1, jr4) + w4
+                          end if
+                        end if
+                      end if
+
+                    end do  ! k3 (VECTOR)
+                  end do  ! k2
+                end do  ! k1
+              end do  ! tc
+            end do  ! tb
+          end do  ! ta
 
         end do  ! i  (gang-sequential hubs)
       end do  ! ig  (GANG)
@@ -600,7 +688,9 @@ contains
       R4jk(:, 1:1, :) = R4jk(:, 1:1, :) + hub_r4jk
     end if
 
-    deallocate(lmat_g, part_n4, part_r4, hub_n4jk, hub_r4jk)
+    if (allocated(lmat_g)) deallocate(lmat_g)
+    if (allocated(blk_g))  deallocate(blk_g)
+    deallocate(part_n4, part_r4, hub_n4jk, hub_r4jk)
     deallocate(hub_perm, reg_lo, gang_grp, gang_lo, gang_n)
 
     call finish_4pcf_output(.false., istart, iend)
@@ -646,6 +736,8 @@ contains
 
     ! Runtime sizing
     integer :: max_nn, ngang, nwin, env_stat
+    ! Neighbour-list tiling of the single-pass Phase 2 (see gpu_tile_size)
+    integer :: tile, nblk, nt_i, ta, tb, tc, alo, ahi, blo, bhi, clo, chi, iac, ibc
     integer(int64) :: mnn2, lmat_bytes, freeb, win_edges, jk_bytes
     character(32) :: env
 
@@ -660,6 +752,9 @@ contains
     integer(int8), allocatable :: stage1_dist(:), stage2_dist(:)
 
     integer(int8), allocatable :: lmat_g(:,:,:)
+    ! Single-pass path: three tile x tile blocks of it per gang instead,
+    ! blk_g(:,:,1:3,ig) = the AB, AC, BC blocks of the current tile triple.
+    integer(int8), allocatable :: blk_g(:,:,:,:)
     ! Per-gang spoke unit vectors for -exactparity
     real(kdkind), allocatable :: ug(:,:,:)
     ! Per-gang partials, channel 1 = even, channel 2 = parity-odd.
@@ -683,7 +778,6 @@ contains
 
     ! ---- Runtime sizing (see query_graph_4pcf_gpu) ----------------------
     max_nn = max(csr_max_row_len(), 1)
-    mnn2   = int(max_nn, int64)**2
     freeb  = gpu_free_mem_bytes()
 
     ! Jackknife accumulators (N4jk + R4jk, two channels) resident on the
@@ -702,12 +796,14 @@ contains
       end if
     end if
 
-    if (freeb < 0) then
-      ngang = 1024
-    else
-      ngang = int(min(4096_int64, max(512_int64, &
-                      ((freeb - RESERVE_BYTES - jk_bytes) / 3) / mnn2)))
-    end if
+    ! Single-pass scratch: three tile x tile int8 blocks per gang (tiled
+    ! Phase 2, see query_graph_4pcf_gpu); the chunked path keeps the full
+    ! max_nn^2 matrix and re-derives the gang count below if the CSR does
+    ! not fit alongside the tiled scratch.
+    call gpu_tile_size(max_nn, merge(-1_int64, (freeb - RESERVE_BYTES - jk_bytes) / 3, freeb < 0), &
+                       tile, nblk)
+    mnn2  = int(nblk, int64) * int(tile, int64)**2
+    ngang = gang_count(freeb, jk_bytes, mnn2)
     lmat_bytes = int(ngang, int64) * mnn2
 
     ! 4 window budgets: hub window costs 7 B/edge (id 4 + dist 1 + phi 2), the
@@ -721,12 +817,24 @@ contains
     ! `nwin <= 3` test admitted up to 6 B/edge and over-commits at int16 phi.
     if (env_stat /= 0 .and. nwin > 1 .and. &
         csr_total_edges * 7_int64 <= win_edges * 20_int64) nwin = 1
+    if (nwin > 1) then          ! chunked: full per-gang matrix, sized as before
+      mnn2  = int(max_nn, int64)**2
+      ngang = gang_count(freeb, jk_bytes, mnn2)
+      lmat_bytes = int(ngang, int64) * mnn2
+      win_edges = csr_edge_window(4, lmat_bytes + jk_bytes)
+      nwin = int((csr_total_edges - 1) / win_edges) + 1
+    end if
 
     if (cfg%rank == 0) &
       print '("4PCFp GPU: max_nn=",i0,"  gangs=",i0,"  lmat scratch=",f6.2," GB",'// &
-            '"  windows=",i0)', max_nn, ngang, real(lmat_bytes, kdkind)/1.0d9, nwin
+            '"  windows=",i0,"  tile=",i0,"x",i0)', max_nn, ngang, real(lmat_bytes, kdkind)/1.0d9, &
+            nwin, merge(tile, 0, nwin == 1), merge(nblk, 0, nwin == 1)
 
-    allocate(lmat_g(max_nn, max_nn, ngang))
+    if (nwin == 1) then
+      allocate(blk_g(tile, tile, nblk, ngang))
+    else
+      allocate(lmat_g(max_nn, max_nn, ngang))
+    end if
     if (exact_g) then
       allocate(ug(max_nn, 3, ngang))
     else
@@ -753,13 +861,14 @@ contains
       !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, csr_phi, weights, &
       !$ACC&        bintable6, chiral_4pcf, dir_x, dir_y, dir_z, px, py, pz, region, &
       !$ACC&        hub_perm, reg_lo, gang_grp, gang_lo, gang_n) &
-      !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4, N4jk, R4jk)
+      !$ACC& CREATE(blk_g, ug) COPY(part_n4, part_r4, N4jk, R4jk)
 
       !$ACC PARALLEL LOOP GANG VECTOR_LENGTH(64) &
       !$ACC& PRIVATE(ig, i, p, g, k1, k2, nn_i, id1, id2, base_i, &
       !$ACC&         ind1, ind2, ind4, p1, p2, w12, rand12, &
       !$ACC&         u1x, u1y, u1z, u2x, u2y, u2z, rn1, jr1, jr2, jr3, &
-      !$ACC&         mixed, dojk, do2, do3)
+      !$ACC&         mixed, dojk, do2, do3, &
+      !$ACC&         nt_i, ta, tb, tc, alo, ahi, blo, bhi, clo, chi, iac, ibc)
       do ig = 1, ngang
         g = gang_grp(ig)
         do p = reg_lo(g) + ig - gang_lo(g), reg_lo(g + 1) - 1, gang_n(g)
@@ -772,19 +881,14 @@ contains
           mixed = .false.
           if (njk_g > 0) jr1 = region(i)
 
-          ! ---- Phase 1: connectivity matrix ------------------------------
-          do k1 = 1, nn_i
-            id1 = csr_id(base_i + k1)
-            if (njk_g > 0) then
-              if (region(id1) /= jr1) mixed = .true.
-            end if
-            !$ACC LOOP VECTOR PRIVATE(k2, id2)
-            do k2 = k1 + 1, nn_i
-              id2 = csr_id(base_i + k2)
-              lmat_g(k2, k1, ig) = &
-                csr_find_dist_bin(csr_ptr, csr_id, csr_dist, id1, id2)
+          ! ---- neighbour-region scan for the jackknife -------------------
+          ! (the connectivity matrix itself is built per tile in Phase 2)
+          if (njk_g > 0) then
+            !$ACC LOOP VECTOR REDUCTION(.or.:mixed) PRIVATE(k1)
+            do k1 = 1, nn_i
+              mixed = mixed .or. (region(csr_id(base_i + k1)) /= jr1)
             end do
-          end do
+          end if
 
           ! ---- Phase 1p: spoke unit vectors for -exactparity -------------
           if (exact_g) then
@@ -806,152 +910,225 @@ contains
           ! partials), or always under the direct-atomic fallback.
           dojk = (njk_g > 0) .and. (mixed .or. direct_hub)
 
-          ! ---- Phase 2: triple loop with parity channel ------------------
-          do k1 = 1, nn_i
-            ind1 = csr_dist(base_i + k1)
-            id1  = csr_id  (base_i + k1)
-            if (dojk) then
-              jr2 = region(id1)
-              do2 = (jr2 > 0 .and. jr2 /= jr1)
-            end if
-            if (exact_g) then
-              u1x = ug(k1, 1, ig); u1y = ug(k1, 2, ig); u1z = ug(k1, 3, ig)
-            else
-              p1 = int(csr_phi(base_i + k1))
-            end if
-
-            do k2 = k1 + 1, nn_i
-              ind4 = lmat_g(k2, k1, ig)
-              if (ind4 == 0) cycle
-              ind2 = csr_dist(base_i + k2)
-              id2  = csr_id  (base_i + k2)
-              if (dojk) then
-                jr3 = region(id2)
-                do3 = (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2)
-              end if
-              if (exact_g) then
-                u2x = ug(k2, 1, ig); u2y = ug(k2, 2, ig); u2z = ug(k2, 3, ig)
-              else
-                p2 = int(csr_phi(base_i + k2))
-              end if
-              w12  = weights(i) * weights(id1) * weights(id2)
-              rand12 = (i > num_data_g .and. id1 > num_data_g .and. &
-                        id2 > num_data_g)
-
-              !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, raw_bin, &
-              !$ACC&   parity_flip, sign_V, ind3, ind5, ind6, p3, w4, vol, &
-              !$ACC&   u3x, u3y, u3z, rn3, sv4, jr4, do4)
-              do k3 = k2 + 1, nn_i
-                ind5 = lmat_g(k3, k1, ig)
-                if (ind5 == 0) cycle
-                ind6 = lmat_g(k3, k2, ig)
-                if (ind6 == 0) cycle
-
-                ind3 = csr_dist(base_i + k3)
-
-                raw_bin    = bintable6(int(ind1), int(ind2), int(ind3), &
-                                       int(ind4), int(ind5), int(ind6))
-                config_idx = abs(raw_bin)
-                if (config_idx == 0) cycle
-                parity_flip = sign(1, raw_bin) * int(chiral_4pcf(config_idx))
-
-                id3 = csr_id(base_i + k3)
-                if (exact_g) then
-                  u3x = ug(k3, 1, ig); u3y = ug(k3, 2, ig); u3z = ug(k3, 3, ig)
-                  vol = u1x * (u2y*u3z - u2z*u3y) &
-                      + u1y * (u2z*u3x - u2x*u3z) &
-                      + u1z * (u2x*u3y - u2y*u3x)
+          ! ---- Phase 2: tiled triple loop -------------------------------
+          ! (k1, k2, k3) runs over tile x tile x tile blocks (ta <= tb <= tc)
+          ! of the neighbour list.  Each block triple needs three tile^2
+          ! blocks of the connectivity matrix -- lmat(k2,k1) [AB], lmat(k3,k1)
+          ! [AC], lmat(k3,k2) [BC] -- built here by binary search into the
+          ! CSR rows (Phase 1 of the untiled kernel) and stored transposed in
+          ! blk_g(:,:,1:3,ig) so consecutive k3 lanes read stride-1.  A block
+          ! is rebuilt only when its tile pair changes: AB once per (ta,tb),
+          ! AC/BC once per tc, diagonal tiles reuse AB.  That is O(nn/tile)
+          ! redundant searches against Phase 2's O(nn^3), and the scratch is
+          ! 3 tile^2 per gang whatever max_nn is.
+          nt_i = (nn_i + tile - 1) / tile
+          do ta = 1, nt_i
+            alo = (ta - 1) * tile + 1
+            ahi = min(ta * tile, nn_i)
+            do tb = ta, nt_i
+              blo = (tb - 1) * tile + 1
+              bhi = min(tb * tile, nn_i)
+              ! AB = lmat(k2 in tb, k1 in ta) -> block 1
+              do k1 = alo, ahi
+                id1 = csr_id(base_i + k1)
+                !$ACC LOOP VECTOR PRIVATE(k2, id2)
+                do k2 = max(blo, k1 + 1), bhi
+                  id2 = csr_id(base_i + k2)
+                  blk_g(k2 - blo + 1, k1 - alo + 1, 1, ig) = &
+                    csr_find_dist_bin(csr_ptr, csr_id, csr_dist, id1, id2)
+                end do
+              end do
+              do tc = tb, nt_i
+                clo = (tc - 1) * tile + 1
+                chi = min(tc * tile, nn_i)
+                if (tc == tb) then
+                  iac = 1                   ! (ta,tc) = (ta,tb) = AB
+                  if (tb == ta) then
+                    ibc = 1                 ! (tb,tc) = (ta,ta) = AB
+                  else
+                    ibc = 3                 ! diagonal block (tb,tb) -> 3
+                    do k2 = blo, bhi
+                      id2 = csr_id(base_i + k2)
+                      !$ACC LOOP VECTOR PRIVATE(k3, id3)
+                      do k3 = k2 + 1, chi
+                        id3 = csr_id(base_i + k3)
+                        blk_g(k3 - clo + 1, k2 - blo + 1, 3, ig) = &
+                          csr_find_dist_bin(csr_ptr, csr_id, csr_dist, id2, id3)
+                      end do
+                    end do
+                  end if
                 else
-                  p3 = int(csr_phi(base_i + k3))
-                  vol = dir_x(p1) * (dir_y(p2)*dir_z(p3) - dir_z(p2)*dir_y(p3)) &
-                      + dir_y(p1) * (dir_z(p2)*dir_x(p3) - dir_x(p2)*dir_z(p3)) &
-                      + dir_z(p1) * (dir_x(p2)*dir_y(p3) - dir_y(p2)*dir_x(p3))
-                end if
-                if (abs(vol) < VOL_DEGEN_TOL) then
-                  sign_V = 0   ! degenerate: no chirality, odd channel gets 0
-                else if (vol > 0.0d0) then
-                  sign_V = 1
-                else
-                  sign_V = -1
-                end if
-
-                w4  = w12 * weights(id3)
-                sv4 = (parity_flip * sign_V) * w4
-
-                !$ACC ATOMIC UPDATE
-                part_n4(config_idx, 1, ig) = part_n4(config_idx, 1, ig) + w4
-                !$ACC ATOMIC UPDATE
-                part_n4(config_idx, 2, ig) = part_n4(config_idx, 2, ig) + sv4
-
-                if (rand12 .and. id3 > num_data_g) then
-                  !$ACC ATOMIC UPDATE
-                  part_r4(config_idx, 1, ig) = part_r4(config_idx, 1, ig) + w4
-                  !$ACC ATOMIC UPDATE
-                  part_r4(config_idx, 2, ig) = part_r4(config_idx, 2, ig) + sv4
+                  iac = 2                   ! AC = lmat(k3 in tc, k1 in ta) -> 2
+                  ibc = 3                   ! BC = lmat(k3 in tc, k2 in tb) -> 3
+                  do k1 = alo, ahi
+                    id1 = csr_id(base_i + k1)
+                    !$ACC LOOP VECTOR PRIVATE(k3, id3)
+                    do k3 = clo, chi
+                      id3 = csr_id(base_i + k3)
+                      blk_g(k3 - clo + 1, k1 - alo + 1, 2, ig) = &
+                        csr_find_dist_bin(csr_ptr, csr_id, csr_dist, id1, id3)
+                    end do
+                  end do
+                  do k2 = blo, bhi
+                    id2 = csr_id(base_i + k2)
+                    !$ACC LOOP VECTOR PRIVATE(k3, id3)
+                    do k3 = clo, chi
+                      id3 = csr_id(base_i + k3)
+                      blk_g(k3 - clo + 1, k2 - blo + 1, 3, ig) = &
+                        csr_find_dist_bin(csr_ptr, csr_id, csr_dist, id2, id3)
+                    end do
+                  end do
                 end if
 
-                ! Jackknife (see module header / jk_gang_layout): the hub-region
-                ! term rides on part_n4/part_r4; only neighbour regions that differ
-                ! from the hub's need atomics, and only mixed hubs get here (dojk).
-                ! direct_hub: fallback that also does the hub term with atomics.
-                if (dojk) then
-                  jr4 = region(id3)
-                  do4 = (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3)
-                  if (direct_hub .and. jr1 > 0) then
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 1, jr1) = N4jk(config_idx, 1, jr1) + w4
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 2, jr1) = N4jk(config_idx, 2, jr1) + sv4
+                ! ---- triple loop over the (ta, tb, tc) tile; k3 across lanes
+                do k1 = alo, ahi
+                  ind1 = csr_dist(base_i + k1)
+                  id1  = csr_id  (base_i + k1)
+                  if (dojk) then
+                    jr2 = region(id1)
+                    do2 = (jr2 > 0 .and. jr2 /= jr1)
                   end if
-                  if (do2) then
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 1, jr2) = N4jk(config_idx, 1, jr2) + w4
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 2, jr2) = N4jk(config_idx, 2, jr2) + sv4
+                  if (exact_g) then
+                    u1x = ug(k1, 1, ig); u1y = ug(k1, 2, ig); u1z = ug(k1, 3, ig)
+                  else
+                    p1 = int(csr_phi(base_i + k1))
                   end if
-                  if (do3) then
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 1, jr3) = N4jk(config_idx, 1, jr3) + w4
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 2, jr3) = N4jk(config_idx, 2, jr3) + sv4
-                  end if
-                  if (do4) then
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 1, jr4) = N4jk(config_idx, 1, jr4) + w4
-                    !$ACC ATOMIC UPDATE
-                    N4jk(config_idx, 2, jr4) = N4jk(config_idx, 2, jr4) + sv4
-                  end if
-                  if (rand12 .and. id3 > num_data_g) then
-                    if (direct_hub .and. jr1 > 0) then
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 1, jr1) = R4jk(config_idx, 1, jr1) + w4
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 2, jr1) = R4jk(config_idx, 2, jr1) + sv4
-                    end if
-                    if (do2) then
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 1, jr2) = R4jk(config_idx, 1, jr2) + w4
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 2, jr2) = R4jk(config_idx, 2, jr2) + sv4
-                    end if
-                    if (do3) then
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 1, jr3) = R4jk(config_idx, 1, jr3) + w4
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 2, jr3) = R4jk(config_idx, 2, jr3) + sv4
-                    end if
-                    if (do4) then
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 1, jr4) = R4jk(config_idx, 1, jr4) + w4
-                      !$ACC ATOMIC UPDATE
-                      R4jk(config_idx, 2, jr4) = R4jk(config_idx, 2, jr4) + sv4
-                    end if
-                  end if
-                end if
 
-              end do  ! k3 (VECTOR)
-            end do  ! k2
-          end do  ! k1
+                  do k2 = max(blo, k1 + 1), bhi
+                    ind4 = blk_g(k2 - blo + 1, k1 - alo + 1, 1, ig)
+                    if (ind4 == 0) cycle
+                    ind2 = csr_dist(base_i + k2)
+                    id2  = csr_id  (base_i + k2)
+                    if (dojk) then
+                      jr3 = region(id2)
+                      do3 = (jr3 > 0 .and. jr3 /= jr1 .and. jr3 /= jr2)
+                    end if
+                    if (exact_g) then
+                      u2x = ug(k2, 1, ig); u2y = ug(k2, 2, ig); u2z = ug(k2, 3, ig)
+                    else
+                      p2 = int(csr_phi(base_i + k2))
+                    end if
+                    w12  = weights(i) * weights(id1) * weights(id2)
+                    rand12 = (i > num_data_g .and. id1 > num_data_g .and. &
+                              id2 > num_data_g)
+
+                    !$ACC LOOP VECTOR PRIVATE(k3, id3, config_idx, raw_bin, &
+                    !$ACC&   parity_flip, sign_V, ind3, ind5, ind6, p3, w4, vol, &
+                    !$ACC&   u3x, u3y, u3z, rn3, sv4, jr4, do4)
+                    do k3 = max(clo, k2 + 1), chi
+                      ind5 = blk_g(k3 - clo + 1, k1 - alo + 1, iac, ig)
+                      if (ind5 == 0) cycle
+                      ind6 = blk_g(k3 - clo + 1, k2 - blo + 1, ibc, ig)
+                      if (ind6 == 0) cycle
+
+                      ind3 = csr_dist(base_i + k3)
+
+                      raw_bin    = bintable6(int(ind1), int(ind2), int(ind3), &
+                                             int(ind4), int(ind5), int(ind6))
+                      config_idx = abs(raw_bin)
+                      if (config_idx == 0) cycle
+                      parity_flip = sign(1, raw_bin) * int(chiral_4pcf(config_idx))
+
+                      id3 = csr_id(base_i + k3)
+                      if (exact_g) then
+                        u3x = ug(k3, 1, ig); u3y = ug(k3, 2, ig); u3z = ug(k3, 3, ig)
+                        vol = u1x * (u2y*u3z - u2z*u3y) &
+                            + u1y * (u2z*u3x - u2x*u3z) &
+                            + u1z * (u2x*u3y - u2y*u3x)
+                      else
+                        p3 = int(csr_phi(base_i + k3))
+                        vol = dir_x(p1) * (dir_y(p2)*dir_z(p3) - dir_z(p2)*dir_y(p3)) &
+                            + dir_y(p1) * (dir_z(p2)*dir_x(p3) - dir_x(p2)*dir_z(p3)) &
+                            + dir_z(p1) * (dir_x(p2)*dir_y(p3) - dir_y(p2)*dir_x(p3))
+                      end if
+                      if (abs(vol) < VOL_DEGEN_TOL) then
+                        sign_V = 0   ! degenerate: no chirality, odd channel gets 0
+                      else if (vol > 0.0d0) then
+                        sign_V = 1
+                      else
+                        sign_V = -1
+                      end if
+
+                      w4  = w12 * weights(id3)
+                      sv4 = (parity_flip * sign_V) * w4
+
+                      !$ACC ATOMIC UPDATE
+                      part_n4(config_idx, 1, ig) = part_n4(config_idx, 1, ig) + w4
+                      !$ACC ATOMIC UPDATE
+                      part_n4(config_idx, 2, ig) = part_n4(config_idx, 2, ig) + sv4
+
+                      if (rand12 .and. id3 > num_data_g) then
+                        !$ACC ATOMIC UPDATE
+                        part_r4(config_idx, 1, ig) = part_r4(config_idx, 1, ig) + w4
+                        !$ACC ATOMIC UPDATE
+                        part_r4(config_idx, 2, ig) = part_r4(config_idx, 2, ig) + sv4
+                      end if
+
+                      ! Jackknife (see module header / jk_gang_layout): the hub-region
+                      ! term rides on part_n4/part_r4; only neighbour regions that differ
+                      ! from the hub's need atomics, and only mixed hubs get here (dojk).
+                      ! direct_hub: fallback that also does the hub term with atomics.
+                      if (dojk) then
+                        jr4 = region(id3)
+                        do4 = (jr4 > 0 .and. jr4 /= jr1 .and. jr4 /= jr2 .and. jr4 /= jr3)
+                        if (direct_hub .and. jr1 > 0) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr1) = N4jk(config_idx, 1, jr1) + w4
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 2, jr1) = N4jk(config_idx, 2, jr1) + sv4
+                        end if
+                        if (do2) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr2) = N4jk(config_idx, 1, jr2) + w4
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 2, jr2) = N4jk(config_idx, 2, jr2) + sv4
+                        end if
+                        if (do3) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr3) = N4jk(config_idx, 1, jr3) + w4
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 2, jr3) = N4jk(config_idx, 2, jr3) + sv4
+                        end if
+                        if (do4) then
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 1, jr4) = N4jk(config_idx, 1, jr4) + w4
+                          !$ACC ATOMIC UPDATE
+                          N4jk(config_idx, 2, jr4) = N4jk(config_idx, 2, jr4) + sv4
+                        end if
+                        if (rand12 .and. id3 > num_data_g) then
+                          if (direct_hub .and. jr1 > 0) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr1) = R4jk(config_idx, 1, jr1) + w4
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 2, jr1) = R4jk(config_idx, 2, jr1) + sv4
+                          end if
+                          if (do2) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr2) = R4jk(config_idx, 1, jr2) + w4
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 2, jr2) = R4jk(config_idx, 2, jr2) + sv4
+                          end if
+                          if (do3) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr3) = R4jk(config_idx, 1, jr3) + w4
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 2, jr3) = R4jk(config_idx, 2, jr3) + sv4
+                          end if
+                          if (do4) then
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 1, jr4) = R4jk(config_idx, 1, jr4) + w4
+                            !$ACC ATOMIC UPDATE
+                            R4jk(config_idx, 2, jr4) = R4jk(config_idx, 2, jr4) + sv4
+                          end if
+                        end if
+                      end if
+
+                    end do  ! k3 (VECTOR)
+                  end do  ! k2
+                end do  ! k1
+              end do  ! tc
+            end do  ! tb
+          end do  ! ta
 
         end do  ! i
       end do  ! ig (GANG)
@@ -1289,7 +1466,9 @@ contains
       R4jk(:, 1:2, :) = R4jk(:, 1:2, :) + hub_r4jk
     end if
 
-    deallocate(lmat_g, part_n4, part_r4, hub_n4jk, hub_r4jk)
+    if (allocated(lmat_g)) deallocate(lmat_g)
+    if (allocated(blk_g))  deallocate(blk_g)
+    deallocate(part_n4, part_r4, hub_n4jk, hub_r4jk)
     deallocate(hub_perm, reg_lo, gang_grp, gang_lo, gang_n)
     if (allocated(ug)) deallocate(ug)
 
@@ -1324,6 +1503,61 @@ contains
   ! catalogue order usually follows sky position, so one global layout
   ! would leave most region groups idle on any single window.
   ! ---------------------------------------------------------------------------
+  ! ---------------------------------------------------------------------------
+  ! Runtime sizing helpers shared by the two 4PCF kernels.
+  ! ---------------------------------------------------------------------------
+  ! Neighbour-list tile edge for the single-pass kernels, and the number of
+  ! blocks the tile needs (nblk): 1 when the tile is the whole list (the
+  ! block IS the connectivity matrix -- the untiled layout, no redundancy),
+  ! 3 otherwise (AB, AC, BC of the current tile triple).  Adaptive: the full
+  ! matrix is kept whenever it already yields GANG_TARGET gangs inside the
+  ! scratch budget; otherwise the largest tile that does with three blocks.
+  ! Tiles cost O(max_nn/tile) redundant Phase-1 searches, negligible against
+  ! Phase 2's O(nn^3).  GRAMSCI_GPU_TILE forces the edge (the tests use tiny
+  ! tiles to exercise the multi-tile path on small data).
+  subroutine gpu_tile_size(max_nn, budget, tile, nblk)
+    integer, intent(in) :: max_nn
+    integer(int64), intent(in) :: budget      ! bytes for all gangs' scratch
+    integer, intent(out) :: tile, nblk
+    integer :: stat, t, nt
+    character(32) :: env
+    ! Gangs to keep resident: fewer and the GPU runs short of parallelism
+    ! (the 512-gang floor of the full-matrix sizing costs a lot at large
+    ! max_nn); more buys little.
+    integer, parameter :: GANG_TARGET = 2048
+    call get_environment_variable('GRAMSCI_GPU_TILE', env, status=stat)
+    if (stat == 0) then
+      read(env, *, iostat=stat) t
+      if (stat /= 0 .or. t < 2) then
+        print *, 'ERROR: GRAMSCI_GPU_TILE must be an integer >= 2'
+        stop 1
+      end if
+      tile = min(max_nn, t)
+    else if (budget < 0 .or. budget / int(max_nn, int64)**2 >= GANG_TARGET) then
+      tile = max_nn
+    else
+      t = int(sqrt(real(budget, kind=8) / (3.0d0 * GANG_TARGET)))
+      t = max(t, 64)
+      nt = (max_nn + t - 1) / t                 ! tiles needed ...
+      tile = (max_nn + nt - 1) / nt             ! ... made equal-sized
+    end if
+    tile = max(2, tile)
+    nblk = merge(1, 3, tile >= max_nn)
+  end subroutine gpu_tile_size
+
+  ! Gangs whose per-gang scratch (scratch_bytes each) fits in ~1/3 of the
+  ! free device memory, clamped to [512, 4096]; 1024 with no device limit.
+  function gang_count(freeb, jk_bytes, scratch_bytes) result(ngang)
+    integer(int64), intent(in) :: freeb, jk_bytes, scratch_bytes
+    integer :: ngang
+    if (freeb < 0) then
+      ngang = 1024
+    else
+      ngang = int(min(4096_int64, max(512_int64, &
+                      ((freeb - RESERVE_BYTES - jk_bytes) / 3) / scratch_bytes)))
+    end if
+  end function gang_count
+
   subroutine jk_gang_layout(istart, iend, ngang, njk, hub_perm, reg_lo, &
                             gang_grp, gang_lo, gang_n, direct_hub, quiet)
     integer, intent(in) :: istart, iend, ngang, njk
