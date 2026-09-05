@@ -752,7 +752,7 @@ contains
       ! =====================================================================
       !$ACC DATA &
       !$ACC& COPYIN(csr_ptr, csr_id, csr_dist, csr_phi, weights, &
-      !$ACC&        bintable6, dir_x, dir_y, dir_z, px, py, pz, region, &
+      !$ACC&        bintable6, chiral_4pcf, dir_x, dir_y, dir_z, px, py, pz, region, &
       !$ACC&        hub_perm, reg_lo, gang_grp, gang_lo, gang_n) &
       !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4, N4jk, R4jk)
 
@@ -854,7 +854,7 @@ contains
                                        int(ind4), int(ind5), int(ind6))
                 config_idx = abs(raw_bin)
                 if (config_idx == 0) cycle
-                parity_flip = sign(1, raw_bin)
+                parity_flip = sign(1, raw_bin) * int(chiral_4pcf(config_idx))
 
                 id3 = csr_id(base_i + k3)
                 if (exact_g) then
@@ -977,7 +977,7 @@ contains
       allocate(stage2_id(maxw), stage2_dist(maxw))
 
       !$ACC DATA &
-      !$ACC& COPYIN(csr_ptr, weights, bintable6, dir_x, dir_y, dir_z, &
+      !$ACC& COPYIN(csr_ptr, weights, bintable6, chiral_4pcf, dir_x, dir_y, dir_z, &
       !$ACC&        px, py, pz, region) &
       !$ACC& CREATE(lmat_g, ug) COPY(part_n4, part_r4, N4jk, R4jk)
 
@@ -1145,7 +1145,7 @@ contains
                                              int(ind4), int(ind5), int(ind6))
                       config_idx = abs(raw_bin)
                       if (config_idx == 0) cycle
-                      parity_flip = sign(1, raw_bin)
+                      parity_flip = sign(1, raw_bin) * int(chiral_4pcf(config_idx))
 
                       id3 = csr_id(base_i + k3)
                       if (exact_g) then
