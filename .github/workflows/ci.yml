@@ -43,7 +43,16 @@ jobs:
         run: bin/gramsci -version
 
       - name: Run regression tests
-        run: cd tests && python3 run_correlation_tests.py
+        run: |
+          set -o pipefail
+          cd tests && python3 -u run_correlation_tests.py 2>&1 | tee ../regression.log
+
+      - name: Regression log tail -> job summary (on failure)
+        if: failure()
+        run: |
+          { echo "### Regression tests failed on $(uname -sm), $(gfortran --version | head -1)";
+            echo '```'; [ -f regression.log ] && tail -n 80 regression.log || echo 'no regression.log (earlier step failed)';
+            echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build OpenCL binary (compile/link check)
         run: |
@@ -94,7 +103,16 @@ jobs:
         run: bin/gramsci -version
 
       - name: Run regression tests
-        run: cd tests && python3 run_correlation_tests.py
+        run: |
+          set -o pipefail
+          cd tests && python3 -u run_correlation_tests.py 2>&1 | tee ../regression.log
+
+      - name: Regression log tail -> job summary (on failure)
+        if: failure()
+        run: |
+          { echo "### Regression tests failed on $(uname -sm), $(gfortran --version | head -1)";
+            echo '```'; [ -f regression.log ] && tail -n 80 regression.log || echo 'no regression.log (earlier step failed)';
+            echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build OpenCL binary (compile/link check)
         run: |
