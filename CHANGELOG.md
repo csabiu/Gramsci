@@ -5,6 +5,61 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
 
 ## [Unreleased]
 
+### Added (OpenACC 4PCF: multi-GPU sharding, tiled kernels, memory sizing)
+- **Multi-GPU sharding for the 4PCF / parity-4PCF GPU kernels, one process
+  per GPU, no MPI.**  `-shard k/n` runs the kernel on the k-th of n
+  contiguous hub ranges and writes the raw accumulators (N4, R4 and the
+  jackknife N4jk, R4jk) to `<out>.shard<k>of<n>`; `-merge n` sums the n
+  files and writes the usual outputs (no GPU needed; the graph is rebuilt on
+  the CPU for the internal 2PCF of the disconnected term).  The split is
+  exact -- in the half graph every quadruplet is counted at exactly one hub,
+  so shard sums are additive, jackknife terms included -- and the ranges are
+  cut on the cumulative per-hub cost `nn_i^3` from the CSR (equal hub counts
+  would give the first shard nearly all the work).  Every shard derives the
+  same boundaries from the same CSR, so no coordination is needed; the merge
+  checks every header field and the range tiling.  Only shard 1 writes the
+  `.jkgal`/`.jkran` label files.  Validation: `src_gpu/validate_shard.sh`
+  (shards + merge byte-identical to the unsharded run for `-4pcf`, `-4pcfp`,
+  `-exactparity` and forced-chunked mode).  On a DESI LRG mock at `-rmax 65`
+  eight RTX 4090 shards reproduce the single-GPU result to 7 digits with the
+  query phase 6.8x faster on the critical path.
+- **Tiled neighbour list in the single-pass 4PCF kernels.**  Phase 2 used to
+  hold the whole `max_nn^2` int8 connectivity matrix per gang, so the scratch
+  grew as `rmax^6` and the kernel fell to its 512-gang floor (or to the
+  chunked path) above `-rmax` ~75.  It now loops over `tile^3` blocks of
+  (k1, k2, k3) holding three `tile^2` blocks (AB, AC, BC) per gang, rebuilt
+  only when their tile pair changes -- O(max_nn/tile) redundant searches
+  against Phase 2's O(nn^3); reads along k3 stay stride-1.  The tile is
+  adaptive: if one full matrix already gives 2048 gangs within budget it is
+  used as a single block (the previous layout, no redundancy), otherwise the
+  largest tile that keeps 2048 gangs.  `GRAMSCI_GPU_TILE` forces the edge
+  for tests.  The rewritten loop compiled to 168 registers and cost a flat
+  15%; the Makefile now caps device kernels at 128 registers (`MAXREG`,
+  0 disables), which ptxas allocates spill-free at 123 for a 3% overhead.
+  Byte-identical to the untiled kernel for every tile tested; at `-rmax 100`
+  with 1:1 randoms a shard takes 1346 s at 2472 gangs against 2369 s for the
+  untiled kernel at its 512-gang floor.
+- **Scratch sized from what the resident CSR leaves.**  The single-pass
+  kernels took a third of free device memory for scratch first and then asked
+  whether the CSR fitted in the rest, counting 7 B/edge even under
+  `-exactparity` (which stores no direction pixel); at `-rmax 150` with 1:1
+  randoms this pushed the run onto the chunked path, whose per-gang full
+  matrix could not be allocated at all.  The decision is now made directly
+  (CSR = 5 B/edge, 7 with the pixel): if it fits beside the reserve, the
+  jackknife accumulators and a minimal tiled scratch, take the single pass
+  with scratch `min(free/3, free - CSR)` and let the tile adapt (which now
+  also accounts for the `-exactparity` spoke vectors).  Runs that fitted
+  before are sized exactly as before.  `GRAMSCI_GPU_MEM_LIMIT` (bytes) caps
+  the free memory the sizing sees so tests can exercise the tight paths on
+  small data.  Together these take the reachable `-rmax` on a 24 GB card
+  from ~75 to 150 Mpc/h: the DESI DR1 LRG 0.6<z<0.8 parity 4PCF at
+  `-rmax 150`, 1:1 randoms, `-exactparity`, completed in 104 GPU-hours over
+  8 shards (14.4 h critical path).
+- Env knobs for testing: `GRAMSCI_GPU_TILE`, `GRAMSCI_GPU_MEM_LIMIT`, and
+  the pre-existing `GRAMSCI_GPU_WIN_EDGES` (force chunking).  The chunked
+  kernels still use the full per-gang matrix; they are reached only when even
+  the tiled CSR does not fit.
+
 ### Fixed (parity-odd 4PCF: achiral binned configurations)
 - **The parity-odd channel of binned configurations invariant under an odd
   vertex permutation depended on catalogue row order.**  Such a configuration
