@@ -5,6 +5,37 @@ Notable changes to GRAMSCI. This project accompanies Sabiu, Hoyle, Kim & Li,
 
 ## [Unreleased]
 
+### Fixed (parity-odd 4PCF: achiral binned configurations)
+- **The parity-odd channel of binned configurations invariant under an odd
+  vertex permutation depended on catalogue row order.**  Such a configuration
+  (e.g. two edges meeting at a vertex in the same bin with their opposite pair
+  also equal) is achiral at the bin level -- the mirror image of any such
+  tetrahedron is the same binned configuration -- so its parity-odd 4PCF is
+  identically zero.  `create_4pcf_binlookup` canonicalised 6-tuples by keeping
+  only strictly smaller permutations, which left the parity sign of these
+  orbits arbitrary: relabelling the same tetrahedron by its odd symmetry
+  flipped the triple product but not the table sign, so the estimator's odd
+  channel depended on which labelling the row order produced (lowest-index
+  hub, id-sorted neighbours).  On sky-sorted catalogues this manufactured a
+  coherent, redshift-space-driven "signal" shared by every sample with the
+  same ordering (DESI DR1 LRG: six independent samples correlated at
+  rho ~ 0.5 at 15 Mpc/h bins), which row-permuted copies of the same
+  catalogue did not reproduce.  At 3 radial bins 44 of 65 configurations are
+  affected, at 5 bins 302 of 843.
+- Fix: `chiral_4pcf(config)` (config_module) is set in
+  `create_4pcf_binlookup` by testing the canonical tuple against the 11 odd
+  permutations; the CPU, OpenACC and OpenCL parity kernels multiply the parity
+  sign by it, so achiral configurations report `zeta_odd = 0` exactly (and a
+  zero jackknife error).  Chiral configurations and the even channel are
+  bit-identical to before.
+- New test `src_gpu/validate_shuffle.sh`: the 4PCF outputs on a row-permuted
+  copy of the test catalogues must match the originals.  It also shows that
+  the default direction-pixel parity sign remains order-dependent for
+  near-coplanar tetrahedra (the hub choice sets the pixel quantisation) while
+  `-exactparity` is invariant; **`-exactparity` is the recommended mode for
+  parity analyses.**  Results produced by earlier versions can be salvaged by
+  discarding achiral configurations.
+
 ### Changed (OpenACC 4PCF jackknife)
 - **The OpenACC 4PCF / parity-4PCF jackknife no longer does a device atomic
   per quadruplet into the shared `N4jk`/`R4jk` arrays.**  Those arrays have
