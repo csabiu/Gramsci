@@ -237,6 +237,7 @@ contains
     integer(c_intptr_t) :: b_ptr, b_id, b_dist, b_phi, b_w, b_bt6, b_sgn
     integer(c_intptr_t) :: b_ne, b_no, b_re, b_ro, kern
     integer(c_intptr_t) :: b_nec, b_noc, b_rec, b_roc, b_reg, b_jkn, b_jkr
+    integer(c_intptr_t) :: b_chi     ! chiral_4pcf(1:ncfg): zeroes the odd channel of achiral configs
 
     if (cfg%rank == 0) print *, 'Performing 4PCF parity (all configs, OpenCL bsearch)'
 
@@ -292,6 +293,7 @@ contains
     b_w    = cl_buf_in_f32(wf,       n_hubs)
     b_bt6  = cl_buf_in_i32(bintable6, int(nb,int64)**6)
     b_sgn  = cl_buf_in_i8 (signv,    int(ndir,int64)**3)
+    b_chi  = cl_buf_in_i8 (chiral_4pcf, int(ncfg,int64))
     b_ne   = cl_buf_zeroed_f32(hne, ncol)
     b_no   = cl_buf_zeroed_f32(hno, ncol)
     b_re   = cl_buf_zeroed_f32(hre, ncol)
@@ -331,6 +333,7 @@ contains
     call cl_arg_mem(kern, 27, b_jkn)
     call cl_arg_mem(kern, 28, b_jkr)
     call cl_arg_i32(kern, 29, cfg%njk)
+    call cl_arg_mem(kern, 30, b_chi)
     ! With -njk the query always runs bucketed (see query_3pcf_cl_module).
     if (cfg%njk <= 0 .and. cl_run_complete(kern, 18, 19, 20, 21, ngang)) then
       call cl_read_f32(b_ne, hne, ncol)
@@ -412,7 +415,7 @@ contains
 
     call cl_release(b_ptr); call cl_release(b_id); call cl_release(b_dist)
     call cl_release(b_phi); call cl_release(b_w)
-    call cl_release(b_bt6); call cl_release(b_sgn)
+    call cl_release(b_bt6); call cl_release(b_sgn); call cl_release(b_chi)
     call cl_release(b_ne); call cl_release(b_no); call cl_release(b_re); call cl_release(b_ro)
     call cl_release(b_nec); call cl_release(b_noc); call cl_release(b_rec); call cl_release(b_roc)
     call cl_release(b_reg); call cl_release(b_jkn); call cl_release(b_jkr)

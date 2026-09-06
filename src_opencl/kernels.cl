@@ -346,8 +346,12 @@ __kernel void k_4pcf_all(__global const long  *ptr,
 /* --------------------------------------------------------------------------
  * 4PCF with parity decomposition (pure binary-search; see k_4pcf_all note).
  * Even channel  += w4;  odd channel += (parity_flip * sign_V) * w4.
- * parity_flip = sign(bt6 entry); sign_V is looked up from the host-built
- * signv table (computed in double, so the chirality matches the CPU exactly).
+ * parity_flip = sign(bt6 entry) * chiral[cfg]; sign_V is looked up from the
+ * host-built signv table (computed in double, so the chirality matches the
+ * CPU exactly).  chiral[cfg] (config_module chiral_4pcf) is 0 for binned
+ * configurations invariant under an odd vertex permutation: their odd 4PCF is
+ * identically zero, and any sign the estimator gave them would depend on the
+ * vertex labelling, i.e. on catalogue row order.
  *   signv[(p1-1)*ndir*ndir + (p2-1)*ndir + (p3-1)] in {-1,0,+1}
  * -------------------------------------------------------------------------- */
 __kernel void k_4pcf_parity(__global const long  *ptr,
@@ -373,7 +377,8 @@ __kernel void k_4pcf_parity(__global const long  *ptr,
                          __global const int   *region, /* jackknife labels, 1..njk */
                          __global float       *jkn,    /* [ncfg x 2ch x njk], Fortran N4jk layout */
                          __global float       *jkr,
-                         const int njk)
+                         const int njk,
+                         __global const char  *chiral) /* [ncfg]: 1 chiral, 0 achiral */
 {
     int  g    = (int)get_global_id(0);
     long gcol = (long)g * ncfg;
@@ -423,7 +428,7 @@ __kernel void k_4pcf_parity(__global const long  *ptr,
                     int raw = bt6[off];
                     int cfgidx = abs(raw);
                     if (cfgidx == 0) continue;
-                    int pflip = (raw > 0) ? 1 : -1;
+                    int pflip = ((raw > 0) ? 1 : -1) * (int)chiral[cfgidx - 1];
 
                     int p3 = (int)phi[b0 + k3 - 1];
                     int sgn = (int)signv[(long)(p1 - 1) * ndir * ndir
