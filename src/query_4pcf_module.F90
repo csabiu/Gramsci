@@ -177,6 +177,8 @@ contains
     allocate(canon_bins_4pcf(6, n_configs_upper))
     allocate(orbit_mult_4pcf(n_configs_upper))
     orbit_mult_4pcf = 0
+    allocate(chiral_4pcf(n_configs_upper))
+    chiral_4pcf = 1_int8
 
     do b1 = 1, n
     do b2 = 1, n
@@ -208,6 +210,20 @@ contains
 
       ! Record the canonical 6-tuple so write routines can iterate by config index
       canon_bins_4pcf(:, cfg%n_configs_4pcf) = canon
+
+      ! Achiral orbit: some ODD vertex permutation maps the canonical tuple
+      ! onto itself (e.g. two edges meeting at a vertex in the same bin with
+      ! their opposite pair also equal).  See chiral_4pcf in config_module.
+      do k = 2, 24
+        if (S4_PARITY(k) /= -1) cycle
+        perm_bins = [ canon(S4_EDGE_PERMS(1,k)), canon(S4_EDGE_PERMS(2,k)), &
+                      canon(S4_EDGE_PERMS(3,k)), canon(S4_EDGE_PERMS(4,k)), &
+                      canon(S4_EDGE_PERMS(5,k)), canon(S4_EDGE_PERMS(6,k)) ]
+        if (all(perm_bins == canon)) then
+          chiral_4pcf(cfg%n_configs_4pcf) = 0_int8
+          exit
+        end if
+      end do
 
       ! Fill all 24 permutations of the original 6-tuple with this config index
       do k = 1, 24
@@ -460,7 +476,7 @@ contains
 
             raw_bin = bintable6(ind1, ind2, ind3, ind4, ind5, ind6)
             config_idx = abs(raw_bin)
-            parity_flip = sign(1, raw_bin)
+            parity_flip = sign(1, raw_bin) * int(chiral_4pcf(config_idx))
 
             if (exact_g) then
               u1x = px(id1) - px(i); u1y = py(id1) - py(i); u1z = pz(id1) - pz(i)
@@ -603,7 +619,7 @@ contains
                 ind6 = output(id2)%dist(gamma)
                 raw_bin     = bintable6(ind1, ind2, ind3, ind4, ind5, ind6)
                 config_idx  = abs(raw_bin)
-                parity_flip = sign(1, raw_bin)
+                parity_flip = sign(1, raw_bin) * int(chiral_4pcf(config_idx))
 
                 if (exact_g) then
                   u3x = px(ha) - px(i)

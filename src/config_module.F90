@@ -124,6 +124,15 @@ module config_module
   ! Number of distinct ordered 6-tuples in each 4PCF config's S4 orbit
   ! (filled by create_4pcf_binlookup; needed by the analytic RRRR)
   integer, allocatable :: orbit_mult_4pcf(:)
+  ! chiral_4pcf(config) = 1 if the binned configuration has a handedness, 0 if
+  ! its bin 6-tuple is invariant under an odd vertex permutation.  For the
+  ! latter the parity-odd 4PCF vanishes identically (the mirror image of any
+  ! such tetrahedron is the same binned configuration), and any sign the
+  ! estimator assigned would depend on which labelling of the tetrahedron the
+  ! catalogue order produced -- with sky-sorted catalogues that manufactures a
+  ! coherent, order-dependent 'signal'.  The kernels multiply the parity sign
+  ! by this flag, so achiral configurations report zeta_odd = 0 exactly.
+  integer(int8), allocatable :: chiral_4pcf(:)
   ! Internal 2PCF for disconnected 4PCF subtraction
   real(kdkind), allocatable :: DD_2pcf(:), RR_2pcf(:), xi_2pcf(:)
   ! Per-region touching sums of the internal 2PCF pair counts (nbins, njk),
@@ -577,6 +586,7 @@ contains
     if (allocated(bintable6)) deallocate(bintable6)
     if (allocated(canon_bins_4pcf)) deallocate(canon_bins_4pcf)
     if (allocated(orbit_mult_4pcf)) deallocate(orbit_mult_4pcf)
+    if (allocated(chiral_4pcf)) deallocate(chiral_4pcf)
     if (allocated(bintable)) deallocate(bintable)
     if (allocated(zeta3_internal)) deallocate(zeta3_internal)
     if (allocated(N4jk)) deallocate(N4jk)

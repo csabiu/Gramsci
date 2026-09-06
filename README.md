@@ -127,7 +127,7 @@ bin/gramsci -gal galaxies.dat -ran randoms.dat \
 | `-3pcf` / `-equi`   | 3PCF (all triangles) / equilateral only                  |
 | `-4pcf` / `-4pcfp`  | 4PCF / 4PCF with parity decomposition                    |
 | `-ntheta <N>` / `-nphi <M>` | direction-pixel grid for `-4pcfp` (default 8×32, `N*M ≤ 32767`) |
-| `-exactparity`      | parity sign from exact positions instead of pixelized directions |
+| `-exactparity`      | parity sign from exact positions instead of pixelized directions (recommended: the pixel sign is hub-order dependent for near-coplanar tetrahedra) |
 | `-njk <N>`          | delete-one jackknife errors with N regions (all modes; see below) |
 | `-jkgal` / `-jkran` | optional external region-label files (one label 1..N per catalogue row) |
 
