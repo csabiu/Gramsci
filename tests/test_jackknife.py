@@ -11,9 +11,11 @@ delete-one counts, so any dedup or accumulation bug shows up directly.
 
 The 4PCF check ports the signed bintable6 fill (seed = lexicographic
 orbit minimum, entry sign = seed parity * permutation parity) rather than
-canonicalising per tuple, so tuples with symmetric (odd-stabilizer) bin
-content get exactly the sign convention the kernel uses.  Run with
--exactparity so Python can reproduce sign_V from the positions alone.
+canonicalising per tuple, and the chiral_4pcf mask: a canonical tuple fixed
+by some odd vertex permutation is achiral at the bin level, so the kernel
+zeroes its odd channel (the labelling-dependent sign it used to get was an
+artefact).  Run with -exactparity so Python can reproduce sign_V from the
+positions alone.
 """
 import itertools
 import os
@@ -107,19 +109,26 @@ def _build_bintable6(nbins):
     """Signed 6D config table, exact port of create_4pcf_binlookup: tuples
     visited in ascending lexicographic order, so each orbit is seeded by its
     canonical (lex-min) member with seed parity +1; each orbit member's sign
-    is the parity of the FIRST table permutation that reaches it."""
+    is the parity of the FIRST table permutation that reaches it.  Also
+    returns chiral[cid - 1] = 0 when the canonical tuple is invariant under
+    an odd permutation (achiral binned configuration, odd channel := 0)."""
     table = {}
     canon = []
+    chiral = []
     for tup in itertools.product(range(1, nbins + 1), repeat=6):
         if tup in table:
             continue
         canon.append(tup)
         cid = len(canon)
+        achiral = False
         for ep, sign in _S4_TABLE:
             perm = tuple(tup[ep[j] - 1] for j in range(6))
             if perm not in table:
                 table[perm] = sign * cid
-    return table, canon
+            if sign < 0 and perm == tup:
+                achiral = True
+        chiral.append(0 if achiral else 1)
+    return table, canon, chiral
 
 
 def _check_jkcov(path, jk_rows, est_col, njk, sigma=None):
@@ -312,7 +321,9 @@ def test_jackknife_4pcf_parity(bindir):
     print('\n=== Test: jackknife realisations vs brute force (4PCF parity) ===')
     rng = np.random.default_rng(11)
     n_gal, n_ran, njk = 150, 300, 4
-    rmin, rmax, nbins = 10.0, 40.0, 2
+    # 3 bins: 65 configurations of which 21 are chiral (2 bins leave only
+    # 1 of 11), at the same quadruplet-enumeration cost.
+    rmin, rmax, nbins = 10.0, 40.0, 3
     gal, ran, out = 'tmp_jk4.gal', 'tmp_jk4.ran', 'tmp_jk4.out'
     pts = np.vstack([_shell_clustered(rng, n_gal, 60.0, 120.0, sigma=15.0),
                      _shell_uniform(rng, n_ran, 60.0, 120.0)])
@@ -329,8 +340,9 @@ def test_jackknife_4pcf_parity(bindir):
     adj, bins = _adjacency(pts, rmin, rmax, nbins)
     n = len(pts)
     is_ran = np.arange(n) >= n_gal
-    table, canon = _build_bintable6(nbins)
+    table, canon, chiral = _build_bintable6(nbins)
     ncfg = len(canon)
+    print(f'  {ncfg - sum(chiral)} of {ncfg} configs achiral (odd channel 0)')
 
     N4 = np.zeros(ncfg + 1); N4o = np.zeros(ncfg + 1)
     R4 = np.zeros(ncfg + 1)
@@ -353,7 +365,7 @@ def test_jackknife_4pcf_parity(bindir):
                            bins[j, k], bins[j, l], bins[k, l])
                     raw = table[tup]
                     cid = abs(raw)
-                    flip = 1 if raw > 0 else -1
+                    flip = (1 if raw > 0 else -1) * chiral[cid - 1]
                     u1 = pts[j] - pts[i]; u1 = u1 / np.linalg.norm(u1)
                     u2 = pts[k] - pts[i]; u2 = u2 / np.linalg.norm(u2)
                     u3 = pts[l] - pts[i]; u3 = u3 / np.linalg.norm(u3)
